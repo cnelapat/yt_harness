@@ -1,3 +1,9 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+# legacy/ is the deliberate "before" fixture: a bad script preserved to be
+# replaced. Linting it makes full_gate unwinnable, since no ticket may touch
+# a file outside its scope — and an unwinnable gate promotes no evidence.
+exclude = ["legacy"]
