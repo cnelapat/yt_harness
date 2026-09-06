@@ -7,6 +7,11 @@ __pycache__/
 .venv/
 venv/
 
-# Per-run gate evidence: local artifacts, regenerated every run.
-# The ticket and its approval lock ARE committed — they are the contract.
+# TELEMETRY — one record per gate run, including every red produced while
+# iterating. High volume, disposable, regenerated on demand. Never committed.
 .edad/records/
+
+# EVIDENCE is the opposite and is deliberately NOT ignored: .edad/evidence/
+# holds one record per ticket, the run in which it passed its full gate,
+# promoted by the controller and committed beside the code it verifies.
+# The ticket and its approval lock are committed too — they are the contract.
