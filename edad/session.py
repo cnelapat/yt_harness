@@ -45,6 +45,10 @@ from edad.gate import (
 
 DEFAULT_IMAGE = "edad-agent:latest"
 AGENT_TIMEOUT_S = 900
+AGENT_TAIL = 2000
+# An agent that exits non-zero and commits nothing is not failing the ticket,
+# it is not running. One retry absorbs a transient; two in a row is systematic.
+MAX_NO_PROGRESS = 2
 
 
 # --- preflight -------------------------------------------------------------
@@ -93,10 +97,6 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
             "ANTHROPIC_API_KEY is set. An unattended loop with a key present bills "
             "the API account instead of the subscription. Unset it and re-run."
         )
-    if not dry_run and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        raise Abort(
-            "CLAUDE_CODE_OAUTH_TOKEN is not set. Run 'claude setup-token' first."
-        )
     tools = gate_toolchain_problems(root)
     if tools:
         raise Abort(
@@ -128,9 +128,33 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     if not dry_run:
         if not shutil.which("claude"):
             raise Abort("the 'claude' CLI is not on PATH")
+        if not agent_has_credential():
+            raise Abort(
+                "the 'claude' CLI has no credential. Run 'claude setup-token' and "
+                "export CLAUDE_CODE_OAUTH_TOKEN, or 'claude auth login'."
+            )
         if sandbox == "docker" and not shutil.which("docker"):
             raise Abort("--sandbox docker requested but docker is not on PATH")
 
+
+def agent_has_credential() -> bool:
+    """Whether the CLI has *a* credential: an exported token or a keychain login.
+
+    Requiring CLAUDE_CODE_OAUTH_TOKEN was wrong - a keychain login runs the
+    agent fine, so that check refused sessions that would have worked. This is
+    deliberately not a proof that the credential is *valid*: `claude auth
+    status` reports loggedIn:true for a malformed token too, so a 401 still
+    reaches the loop. MAX_NO_PROGRESS is what catches that.
+    """
+    proc = subprocess.run(
+        ["claude", "auth", "status"], capture_output=True, text=True, check=False
+    )
+    if proc.returncode != 0:
+        return False
+    try:
+        return bool(json.loads(proc.stdout).get("loggedIn"))
+    except (json.JSONDecodeError, AttributeError):
+        return False
 
 # --- worktree --------------------------------------------------------------
 
@@ -313,6 +337,11 @@ class Iteration:
     gate_passed: bool
     signature: str
     violations: list[str] = field(default_factory=list)
+    made_commit: bool = True
+    # The agent's own stderr. Not evidence - the gate decides the verdict - but
+    # without it an infrastructure failure (a 401, a crash) is indistinguishable
+    # from a failing implementation, and has to be reconstructed by hand.
+    agent_output: str = ""
 
 
 @dataclass
@@ -377,6 +406,8 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
     max_iter = (ticket.get("kill_conditions") or {}).get("max_iterations", 6)
     signatures: list[str] = []
     rec: Record | None = None
+    prev_commit = base
+    no_progress = 0
 
     try:
         for n in range(1, max_iter + 1):
@@ -389,14 +420,32 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
                 raise Abort(out)
 
             commit = commit_iteration(wt, ticket["id"], n)
+            made_commit = commit != prev_commit
+            prev_commit = commit
             rec = evaluate(wt, ticket, "acceptance", base)
             write_record(root, rec)
             sig = failure_signature(rec)
             signatures.append(sig)
             log.iterations.append(
-                Iteration(n, exit_code, commit, rec.passed, sig, list(rec.violations))
+                Iteration(n, exit_code, commit, rec.passed, sig, list(rec.violations),
+                          made_commit, out[-AGENT_TAIL:])
             )
             print(f"gate: {'PASS' if rec.passed else 'FAIL'}  {'; '.join(rec.violations)}")
+
+            # Checked before check_kills: when the agent never ran, the gate's
+            # failure signature describes the frozen test rather than the cause,
+            # and aborting on it points at the one file that is not at fault.
+            if exit_code != 0 and not made_commit:
+                no_progress += 1
+                if no_progress >= MAX_NO_PROGRESS:
+                    raise Abort(
+                        f"agent exited {exit_code} and committed nothing, "
+                        f"{no_progress} iterations running - it is not failing the "
+                        f"ticket, it is not running. Its last output:\n"
+                        f"{out[-1000:]}"
+                    )
+            else:
+                no_progress = 0
 
             reason = check_kills(ticket, rec, wt, base, signatures)
             if reason:
