@@ -1,0 +1,29 @@
+{
+  "ticket": "T001",
+  "started_at": "2026-09-06T22:09:48.757361+00:00",
+  "commit": "af76c87bf11725b01ad7f625f96b166475f0bffd",
+  "base_ref": "1f688ba4596f16b02e123e313933ed43e499b46b",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "scope_ok": true,
+  "commands_ok": true,
+  "violations": [],
+  "changed_files": [
+    "ytmp3/converter.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 0.11,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.01s\n"
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.02,
+      "output_tail": "All checks passed!\n"
+    }
+  ],
+  "passed": true
+}
