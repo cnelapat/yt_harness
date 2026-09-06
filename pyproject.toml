@@ -3,7 +3,15 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.ruff]
+line-length = 100
 # legacy/ is the deliberate "before" fixture: a bad script preserved to be
 # replaced. Linting it makes full_gate unwinnable, since no ticket may touch
 # a file outside its scope — and an unwinnable gate promotes no evidence.
 exclude = ["legacy"]
+
+[tool.ruff.lint]
+# Pinned explicitly. Ruff's defaults change between releases, so an unpinned
+# rule set means the same commit can pass on one machine and fail on another —
+# which would make every evidence record unreproducible.
+select = ["E", "F", "W", "I", "UP", "B", "PL", "RUF"]
+ignore = ["PLR2004"]  # magic-value comparisons; too noisy for parsing code

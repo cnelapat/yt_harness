@@ -193,8 +193,11 @@ def run_commands(root: Path, commands: list[str], deny_network: bool) -> list[Co
     results = []
     for cmd in commands:
         t0 = time.monotonic()
+        # check=False is deliberate: a non-zero exit is the measurement,
+        # not an error. Explicit so the intent survives a linter upgrade.
         proc = subprocess.run(
-            cmd, cwd=root, shell=True, capture_output=True, text=True, env=env
+            cmd, cwd=root, shell=True, capture_output=True, text=True, env=env,
+            check=False,
         )
         out = (proc.stdout + proc.stderr)[-TAIL_CHARS:]
         results.append(
@@ -286,7 +289,9 @@ def write_record(root: Path, rec: Record) -> Path:
 
 
 def report(rec: Record) -> None:
-    mark = lambda ok: "PASS" if ok else "FAIL"  # noqa: E731
+    def mark(ok: bool) -> str:
+        return "PASS" if ok else "FAIL"
+
     print(f"\n{rec.ticket} @ {rec.commit[:8]}  [{rec.gate}]")
     print(f"  freeze   {mark(rec.freeze_ok)}")
     print(f"  scope    {mark(rec.scope_ok)}  ({len(rec.changed_files)} file(s) changed)")

@@ -1,0 +1,6 @@
+# Toolchain for the gate itself. Pinned exactly: the gate's verdict must be a
+# property of the commit, not of whatever versions were installed that day.
+# Bumping any pin invalidates prior evidence and needs a re-run to restore it.
+pytest==8.4.2
+ruff==0.15.18
+PyYAML==6.0.2
