@@ -54,6 +54,38 @@ class Abort(Exception):
     """Stop the session. Carries the reason recorded in the session log."""
 
 
+def gate_toolchain_problems(root: Path) -> list[str]:
+    """Compare the versions the GATE will resolve against requirements-gate.txt.
+
+    Deliberately shells out rather than importing here: evaluate() runs its
+    commands through a shell, so a pin satisfied inside this interpreter proves
+    nothing about the one `python3 -m pytest` actually reaches. A worktree is a
+    fresh checkout with no .venv, so an inherited PATH is the only thing making
+    the pinned toolchain available - and if it is missing, the gate reports the
+    toolchain's failure as the code's.
+    """
+    req = root / "requirements-gate.txt"
+    if not req.exists():
+        return []
+    problems = []
+    for raw in req.read_text().splitlines():
+        line = raw.split("#")[0].strip()
+        if "==" not in line:
+            continue
+        name, _, pinned = line.partition("==")
+        name, pinned = name.strip(), pinned.strip()
+        code = f"from importlib.metadata import version; print(version({name!r}))"
+        proc = subprocess.run(
+            f"python3 -c {shlex.quote(code)}",
+            cwd=root, shell=True, capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            problems.append(f"{name}: not installed for the gate's python3 (pinned {pinned})")
+        elif proc.stdout.strip() != pinned:
+            problems.append(f"{name}: {proc.stdout.strip()}, pinned {pinned}")
+    return problems
+
+
 def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     """Refuse to start rather than fail expensively halfway through."""
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -64,6 +96,15 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     if not dry_run and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         raise Abort(
             "CLAUDE_CODE_OAUTH_TOKEN is not set. Run 'claude setup-token' first."
+        )
+    tools = gate_toolchain_problems(root)
+    if tools:
+        raise Abort(
+            "the gate's toolchain does not match requirements-gate.txt: "
+            + "; ".join(tools)
+            + ". A gate run on the wrong toolchain reports FAIL for the toolchain "
+            "rather than the code, and feeds that to the agent as evidence. "
+            "Install the pins: pip install -r requirements-gate.txt"
         )
     if ticket.get("status") != "approved":
         raise Abort(f"ticket status is {ticket.get('status')!r}, expected 'approved'")
@@ -111,10 +152,22 @@ def make_worktree(root: Path, ticket_id: str, base: str) -> tuple[Path, str]:
 # --- prompting -------------------------------------------------------------
 
 
-def initial_prompt(ticket: dict) -> str:
+def initial_prompt(ticket: dict, sandbox: str = "none") -> str:
     scope = "\n".join(f"  - {s}" for s in ticket.get("scope") or [])
     frozen = "\n".join(f"  - {s}" for s in ticket.get("frozen") or [])
     accept = "\n".join(f"  {c}" for c in ticket.get("acceptance") or [])
+    # Rule 4 must describe the run it is in. Under --sandbox none the agent
+    # does have the network, and asserting otherwise puts an unenforceable
+    # claim in a prompt whose other rules are all mechanically checked.
+    network = (
+        "4. You have no network access: the container runs with --network none.\n"
+        "   Do not attempt installs or downloads."
+        if sandbox == "docker"
+        else "4. Do not use the network: no installs, no downloads. The pinned\n"
+        "   toolchain is already present and complete. This run is unsandboxed,\n"
+        "   so unlike the rules above this one is not mechanically enforced. It\n"
+        "   is still a requirement."
+    )
     return f"""You are implementing ticket {ticket['id']}: {ticket.get('title', '')}
 
 {ticket.get('_body', '')}
@@ -131,10 +184,11 @@ them ends the session immediately and discards the work.
 {frozen}
 
 3. You are done when these commands exit 0 — not when you believe the work is
-   complete. Your own assessment is not consulted:
+   complete. Your own assessment is not consulted. Run them yourself as you go;
+   the same commands decide the verdict:
 {accept}
 
-4. You have no network access. Do not attempt installs or downloads.
+{network}
 
 Work directly in the repository. Do not create a summary, a report, or a
 completion file; nothing you write about your work is read.
@@ -314,7 +368,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
         sandbox=args.sandbox,
     )
 
-    prompt = initial_prompt(ticket)
+    prompt = initial_prompt(ticket, args.sandbox)
     if args.dry_run:
         print(prompt)
         print(f"\n[dry-run] worktree {wt} on {branch}; no agent invoked")
