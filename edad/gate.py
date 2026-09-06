@@ -230,11 +230,13 @@ def cmd_approve(args) -> int:
     return 0
 
 
-def cmd_run(args) -> int:
-    root = repo_root()
-    ticket = load_ticket(root, args.ticket)
+def evaluate(
+    root: Path, ticket: dict, gate_name: str = "acceptance", base_ref: str | None = None
+) -> Record:
+    """Run the three checks and return a Record. The single entry point for
+    anything that needs a verdict — the CLI and the session controller both
+    call this, so they cannot drift apart."""
     kills = ticket.get("kill_conditions") or {}
-    gate_name = "full_gate" if args.full else "acceptance"
     commands = ticket.get(gate_name) or []
     if not commands:
         die(f"ticket declares no '{gate_name}' commands")
@@ -243,7 +245,7 @@ def cmd_run(args) -> int:
         ticket=ticket["id"],
         started_at=datetime.now(timezone.utc).isoformat(),
         commit=git(root, "rev-parse", "HEAD"),
-        base_ref=args.base_ref,
+        base_ref=base_ref,
         gate=gate_name,
         freeze_ok=True,
         scope_ok=True,
@@ -253,7 +255,7 @@ def cmd_run(args) -> int:
     rec.freeze_ok, freeze_problems = check_freeze(root, ticket)
     rec.violations += freeze_problems
 
-    rec.changed_files = changed_files(root, args.base_ref)
+    rec.changed_files = changed_files(root, base_ref)
     rec.scope_ok, scope_problems = check_scope(ticket, rec.changed_files)
     if kills.get("diff_touches_outside_scope", True):
         rec.violations += scope_problems
@@ -272,6 +274,14 @@ def cmd_run(args) -> int:
             f"command failed ({c.exit_code}): {c.command}" for c in rec.commands if not c.ok
         ]
 
+    return rec
+
+
+def cmd_run(args) -> int:
+    root = repo_root()
+    ticket = load_ticket(root, args.ticket)
+    gate_name = "full_gate" if args.full else "acceptance"
+    rec = evaluate(root, ticket, gate_name, args.base_ref)
     write_record(root, rec)
     report(rec)
     return 0 if rec.passed else 1

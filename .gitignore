@@ -15,3 +15,7 @@ venv/
 # holds one record per ticket, the run in which it passed its full gate,
 # promoted by the controller and committed beside the code it verifies.
 # The ticket and its approval lock are committed too — they are the contract.
+
+# Session logs are telemetry, like records. Worktrees are scratch.
+.edad/sessions/
+.edad/worktrees/

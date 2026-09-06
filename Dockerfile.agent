@@ -1,0 +1,9 @@
+# Sandbox for unattended runs. Built once; `--network none` at run time is what
+# makes the ticket's network_access: deny real rather than advisory.
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code
+COPY requirements-gate.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-gate.txt
+WORKDIR /work
