@@ -128,6 +128,7 @@ kill_conditions:
   diff_touches_outside_scope: true
   frozen_file_hash_mismatch: true
   max_diff_lines: 250
+  command_timeout_s: 900       # per gate command; cannot be switched off
   network_access: deny
 ---
 
@@ -187,6 +188,28 @@ diff touches nothing outside `scope`.
   first-party, not the test being wrong. Editing the frozen file to satisfy it changes
   a hash the lock depends on; declaring `known-first-party` in `pyproject.toml` leaves
   the lock and its red proof intact.
+- **Every gate command is killed eventually.** `command_timeout_s` bounds each one
+  individually, defaulting to 900s when absent or unusable — there is no way to ask for
+  no limit, because an unbounded command is the one failure that leaves nothing behind:
+  a test blocking on stdin hangs the verifier, so the session produces no verdict, no
+  record and no log. A killed command is recorded as `timed_out`, distinct from a
+  non-zero exit, and reported to the agent as "did not finish" rather than as a test it
+  should go and fix. Raise it for a genuinely slow suite; do not raise it to paper over
+  a hang.
+- **`full_gate` is ratcheted against a baseline taken at approval.** `approve` runs
+  every `full_gate` command once against the current tree and records what already
+  fails into the lock, keyed per finding — pytest by node id, lint by file plus rule
+  code, with counts. At promotion the session subtracts it: a failure already in the
+  baseline is the repo's, not the agent's, and stops the session as `unwinnable` rather
+  than being reported as work the agent failed to do. This is what makes a repo-wide
+  `full_gate` usable on a codebase that is not already green.
+
+  Two consequences worth writing tickets around. A failure neither run can *identify*
+  (a bare `make: *** Error 1`) cannot be ratcheted, so that command stays
+  all-or-nothing — prefer gate commands whose failures name themselves. And widening
+  the baseline needs `--rebaseline`: re-approving after the repo has picked up new
+  failures is refused by default, because silently adopting them makes the gate certify
+  the breakage it exists to catch.
 - **Commands must not need the network** when `network_access: deny`.
 - **Keep `max_diff_lines` honest.** Too tight kills good work mid-flight; too loose
   lets an agent rewrite the repo.

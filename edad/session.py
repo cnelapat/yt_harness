@@ -252,11 +252,19 @@ completion file; nothing you write about your work is read.
 
 
 def retry_prompt(ticket: dict, rec: Record, iteration: int, sandbox: str = "none") -> str:
-    fails = "\n\n".join(
-        f"$ {c.command}\nexit {c.exit_code}\n{c.output_tail[-1500:]}"
-        for c in rec.commands
-        if not c.ok
-    )
+    # A killed command is described as killed. Presenting a timeout as "exit
+    # 124" alongside real failures sends the agent to debug an assertion that
+    # never ran; what it needs to know is that something did not terminate.
+    def describe(c) -> str:
+        if c.timed_out:
+            return (
+                f"$ {c.command}\nKILLED after {c.duration_s}s - this command did not "
+                f"finish and reported no result. Something is not terminating. The "
+                f"output below is partial:\n{c.output_tail[-1500:]}"
+            )
+        return f"$ {c.command}\nexit {c.exit_code}\n{c.output_tail[-1500:]}"
+
+    fails = "\n\n".join(describe(c) for c in rec.commands if not c.ok)
     return f"""Iteration {iteration} of ticket {ticket['id']} did not pass the gate.
 
 This is the verifier's own output, not a summary:
@@ -329,6 +337,15 @@ def diff_line_count(wt: Path, base: str) -> int:
 def failure_signature(rec: Record) -> str:
     """Stable fingerprint of *what* failed, so repeated identical failure is
     detectable. Prefers pytest node ids; falls back to hashing the output."""
+    # A timeout first, and deliberately not hashed. The partial output of a hang
+    # varies run to run, so hashing it makes every hang a fresh signature and
+    # same_test_fails_consecutively never fires - the session burns its whole
+    # iteration budget at full timeout each time. Keyed on the command alone,
+    # a repeated hang is repeated identical failure, which is what it is.
+    killed = sorted(c.command for c in rec.commands if c.timed_out)
+    if killed:
+        return "timeout:" + "|".join(killed)
+
     ids: list[str] = []
     for c in rec.commands:
         if c.ok:
@@ -345,8 +362,19 @@ def check_kills(ticket: dict, rec: Record, wt: Path, base: str,
     k = ticket.get("kill_conditions") or {}
     if k.get("frozen_file_hash_mismatch", True) and not rec.freeze_ok:
         return "frozen acceptance test was modified"
-    if k.get("diff_touches_outside_scope", True) and not rec.scope_ok:
-        return "diff touched files outside the ticket's scope"
+    if rec.scope_enforced and not rec.scope_ok:
+        # Name them. The session already holds the list, and without it the
+        # reader learns only that SOME file was out of scope and has to
+        # reconstruct which from the diff. With it, widening the ticket is one
+        # edit and one re-approve. Scope stays strict; only the message widens.
+        strays = [v.removeprefix("out of scope: ") for v in rec.scope_violations]
+        return (
+            "diff touched files outside the ticket's scope: "
+            + ", ".join(strays)
+            + f". Declared scope: {', '.join(ticket.get('scope') or []) or '(none)'}. "
+            "If the ticket should have covered these, add them to `scope` and "
+            "re-approve; the freeze check will require it."
+        )
     budget = k.get("max_diff_lines")
     if budget:
         n = diff_line_count(wt, base)
@@ -423,6 +451,40 @@ def full_gate_failure(ticket: dict, full: Record) -> Abort:
             + ". Acceptance passed, so this is not unfinished work - the failure "
             "is inside a frozen file the agent may not edit, and no rerun can "
             "clear it. Fix the ticket or the tool configuration, then re-approve."
+        )
+
+    # The frozen-file case above is one way a gate can be unwinnable, and it was
+    # the only one this could see. The commoner one on an existing codebase is
+    # duller: a failure somewhere the ticket never mentions, which names no
+    # frozen path, produces no FrozenBlock, and used to fall through to the
+    # generic abort below - reported as the agent's failure. With a baseline it
+    # is simply identifiable as not the agent's, and this is not a second
+    # classifier so much as the baseline finally arriving.
+    if full.pre_existing_only:
+        return Unwinnable(
+            "full_gate fails only in ways that were already failing before this "
+            "ticket began, at baseline commit "
+            + (full.baseline_commit or "unknown")[:8]
+            + ": " + ", ".join(sorted(full.new_failures))
+            + ". Acceptance passed and the agent introduced no new failure, so no "
+            "rerun clears this. Fix the pre-existing failures, or re-approve with "
+            "--rebaseline to accept them as the new baseline."
+        )
+
+    if full.uncomparable_failures:
+        # Say so rather than implying the ratchet was applied and cleared.
+        return Abort(
+            "acceptance passed but full_gate failed, and the baseline could not be "
+            "applied to: " + ", ".join(full.uncomparable_failures)
+            + " (no baseline entry, or a failure neither run could identify). "
+            "Violations: " + "; ".join(full.violations)
+        )
+
+    introduced = {c: k for c, k in full.new_failures.items() if k}
+    if introduced:
+        return Abort(
+            "acceptance passed but full_gate found failures this ticket introduced: "
+            + "; ".join(f"{c} -> {', '.join(k)}" for c, k in introduced.items())
         )
     return Abort("acceptance passed but full_gate failed: " + "; ".join(full.violations))
 

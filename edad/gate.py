@@ -38,6 +38,16 @@ import yaml
 
 TAIL_CHARS = 4000
 
+# Every gate command is killed eventually. The default exists because the
+# failure it prevents is unattended and silent: a legacy test that blocks on
+# stdin, or a socket with no timeout of its own, hangs the gate forever. The
+# session controller times out the AGENT but nothing timed out the VERIFIER, so
+# that hang produced no verdict, no record, and no session log - the one
+# failure mode that leaves nothing behind to diagnose. A ticket can raise or
+# lower it with kill_conditions.command_timeout_s; it cannot switch it off.
+DEFAULT_COMMAND_TIMEOUT_S = 900
+TIMEOUT_EXIT_CODE = 124  # what timeout(1) and the shell convention use
+
 
 def repo_root() -> Path:
     env = os.environ.get("EDAD_REPO")
@@ -117,6 +127,16 @@ class CommandResult:
     # from a lossy artifact - and it lands in the record JSON, which means the
     # record itself says which frozen files a failure implicated.
     named_paths: list[str] = field(default_factory=list)
+    # A killed command did not RUN, and that is a different fact from a command
+    # that ran and failed. Without this the two are one non-zero exit code, and
+    # the session's retry prompt hands the agent a timeout as though it were a
+    # test failure - sending it to fix a test that never reported a result.
+    timed_out: bool = False
+    # Computed by the verifier from the untruncated output, for the same reason
+    # named_paths is: a failure past TAIL_CHARS vanishes from the tail, and a
+    # baseline comparison re-derived from a lossy copy concludes "nothing new"
+    # for failures it simply could not see.
+    failure_keys: dict[str, int] | None = None
 
     @property
     def ok(self) -> bool:
@@ -131,8 +151,21 @@ class Record:
     base_ref: str | None
     gate: str
     freeze_ok: bool
-    scope_ok: bool
     commands_ok: bool
+    # Scope is two separate facts, and collapsing them was a bug in the record
+    # itself. `scope_violations` is what the verifier MEASURED: every changed
+    # file that matched no declared pattern, recorded whether or not the ticket
+    # asked for the check to be binding. `scope_enforced` is the POLICY, copied
+    # from kill_conditions.diff_touches_outside_scope.
+    #
+    # Previously a ticket setting that kill condition false made evaluate()
+    # assign scope_ok = True outright, so the record asserted a clean scope the
+    # gate had just watched fail. That is the same class as a record naming
+    # decisions it never verified: the artifact claiming something it did not
+    # derive. Everything in this harness rests on the record being a report of
+    # what happened, so the two facts stay separate and `passed` combines them.
+    scope_violations: list[str] = field(default_factory=list)
+    scope_enforced: bool = True
     violations: list[str] = field(default_factory=list)
     changed_files: list[str] = field(default_factory=list)
     commands: list[CommandResult] = field(default_factory=list)
@@ -153,10 +186,45 @@ class Record:
     # field still verifies the frozen tests, but cannot say the ticket was the
     # one approved - a weaker claim, and the record should say which it makes.
     ticket_verified: bool = False
+    # The ratchet, on full_gate runs: what this run's failures were compared
+    # against, and what survived the comparison. Stored rather than re-derived,
+    # so the evidence record says which baseline it was judged against instead
+    # of leaving a reader to assume the current one.
+    baseline_commit: str | None = None
+    new_failures: dict[str, list[str]] = field(default_factory=dict)
+    # Failing commands the ratchet could not be applied to - no baseline entry,
+    # or a failure neither side could identify. Named, not silently folded into
+    # either answer: "we could not tell" is its own result, and treating it as
+    # "nothing new" is exactly how a ratchet certifies a regression.
+    uncomparable_failures: list[str] = field(default_factory=list)
+
+    @property
+    def pre_existing_only(self) -> bool:
+        """Every failing command failed only in ways the baseline already had.
+
+        This is what makes a pre-existing failure attributable to the repo
+        rather than to the agent. False when nothing failed, and false when any
+        failure could not be compared - both are cases where this answer would
+        be an assumption rather than a measurement.
+        """
+        if self.commands_ok or self.uncomparable_failures:
+            return False
+        return not any(self.new_failures.values())
+
+    @property
+    def scope_ok(self) -> bool:
+        """The measurement: did the diff stay inside the declared scope.
+
+        Independent of whether the ticket made it binding. A reader asking
+        "was this diff in scope" gets the answer the gate actually computed.
+        """
+        return not self.scope_violations
 
     @property
     def passed(self) -> bool:
-        return self.freeze_ok and self.scope_ok and self.commands_ok
+        """The verdict, which is where policy applies - not in the measurement."""
+        scope_clears = self.scope_ok or not self.scope_enforced
+        return self.freeze_ok and scope_clears and self.commands_ok
 
 
 # --- checks ----------------------------------------------------------------
@@ -309,11 +377,22 @@ def check_scope(ticket: dict, files: list[str]) -> tuple[bool, list[str]]:
     return not strays, [f"out of scope: {f}" for f in strays]
 
 
+def command_timeout(ticket: dict) -> int:
+    """Seconds any one gate command may run. Never None: an absent or unusable
+    kill condition falls back to the default rather than to no limit, because
+    the unbounded case is the one that hangs a session with nothing recorded."""
+    raw = (ticket.get("kill_conditions") or {}).get("command_timeout_s")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        return DEFAULT_COMMAND_TIMEOUT_S
+    return raw
+
+
 def run_commands(
     root: Path,
     commands: list[str],
     deny_network: bool,
     flag_paths: list[str] | tuple[str, ...] = (),
+    timeout_s: int = DEFAULT_COMMAND_TIMEOUT_S,
 ) -> list[CommandResult]:
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)  # never let a gate run bill an API account
@@ -324,19 +403,96 @@ def run_commands(
         t0 = time.monotonic()
         # check=False is deliberate: a non-zero exit is the measurement,
         # not an error. Explicit so the intent survives a linter upgrade.
-        proc = subprocess.run(
-            cmd, cwd=root, shell=True, capture_output=True, text=True, env=env,
-            check=False,
-        )
-        out = proc.stdout + proc.stderr
-        named = [rel for rel in flag_paths if rel in out]  # before the truncation
+        timed_out = False
+        try:
+            proc = subprocess.run(
+                cmd, cwd=root, shell=True, capture_output=True, text=True, env=env,
+                check=False, timeout=timeout_s,
+            )
+            exit_code, out = proc.returncode, proc.stdout + proc.stderr
+        except subprocess.TimeoutExpired as e:
+            # Keep whatever it managed to emit: with a hang, the last few lines
+            # before the block are the diagnosis, and discarding them leaves the
+            # record saying only that something took too long.
+            timed_out = True
+            exit_code = TIMEOUT_EXIT_CODE
+            # TimeoutExpired carries the raw buffers: text=True governs the
+            # decoding subprocess.run does on the normal path, not what the
+            # exception holds, so these arrive as bytes and concatenating them
+            # with a str raises inside the handler for a hang - swallowing the
+            # partial output and the timeout together.
+            partial = "".join(
+                b.decode(errors="replace") if isinstance(b, bytes) else b
+                for b in (e.stdout, e.stderr)
+                if b
+            )
+            out = (
+                f"{partial}\n"
+                f"edad: killed after {timeout_s}s (kill_conditions.command_timeout_s). "
+                f"This command did not finish, so it reported no result: the output "
+                f"above is partial and there is no verdict on the code under test."
+            )
+        # Both derived from the full output, before the line below truncates it.
+        named = [rel for rel in flag_paths if rel in out]
+        if exit_code == 0:
+            keys: dict[str, int] | None = {}  # ran clean: no failures, not unknown
+        elif timed_out:
+            keys = None  # reported no result at all; nothing to compare
+        else:
+            keys = extract_failure_keys(out)
         results.append(
             CommandResult(
-                cmd, proc.returncode, round(time.monotonic() - t0, 2),
-                out[-TAIL_CHARS:], named,
+                cmd, exit_code, round(time.monotonic() - t0, 2),
+                out[-TAIL_CHARS:], named, timed_out, keys,
             )
         )
     return results
+
+
+# Failure identity: a key stable enough to compare one run against another.
+#
+# The keys are deliberately coarse in different ways per tool, because the churn
+# is per tool. A pytest node id is stable across edits and is used as-is. A lint
+# finding is not: its line and column move every time anything above it changes,
+# so keying on them turns one unfixed finding into a fresh failure on every
+# commit and the ratchet never holds. File plus rule code is the coarsest key
+# that still distinguishes findings, and that coarseness is the accepted cost.
+PYTEST_FAILURE_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
+RUFF_FAILURE_RE = re.compile(r"^(\S+?):\d+:\d+: ([A-Z]+[0-9]+)\b", re.MULTILINE)
+
+
+def extract_failure_keys(output: str) -> dict[str, int] | None:
+    """Identities of the failures in one command's FULL output, with counts.
+
+    None means "nothing recognisable" - the command failed in a way this
+    function cannot name. That is distinct from {} ("ran, no failures"), and the
+    distinction is load-bearing: an unrecognised failure must never be compared
+    against a baseline, because the comparison would silently conclude that
+    nothing new is wrong. Callers treat None as "cannot ratchet this command".
+
+    Counts, not a set, because the lint key is coarse. Three E501s in one file
+    collapse to one key, so without counts a baseline holding one of them would
+    absorb the other two - exactly the stale-baseline absorption the coarse key
+    otherwise invites.
+    """
+    keys: dict[str, int] = {}
+    for node in PYTEST_FAILURE_RE.findall(output):
+        keys[f"pytest:{node}"] = keys.get(f"pytest:{node}", 0) + 1
+    for path, rule in RUFF_FAILURE_RE.findall(output):
+        k = f"lint:{path}:{rule}"
+        keys[k] = keys.get(k, 0) + 1
+    return keys or None
+
+
+def new_failure_keys(
+    now: dict[str, int] | None, baseline: dict[str, int] | None
+) -> list[str] | None:
+    """Keys failing more now than the baseline recorded. None when the two
+    cannot be compared at all, which is never the same answer as "nothing new".
+    """
+    if now is None or baseline is None:
+        return None
+    return sorted(k for k, n in now.items() if n > baseline.get(k, 0))
 
 
 # How to ask a tool its version when importlib.metadata cannot see it.
@@ -494,8 +650,29 @@ def frozen_blocks(results: list[CommandResult], ticket: dict) -> list[FrozenBloc
     return blocks
 
 
-def probe_full_gate(root: Path, ticket: dict) -> list[FrozenBlock]:
-    """Run full_gate at approval and report failures landing in a frozen file.
+def run_full_gate_probe(root: Path, ticket: dict) -> list[CommandResult]:
+    """Run every full_gate command at approve time, skipping nothing.
+
+    The three-token prefix skip that used to live here was moved out to the
+    warning that needs it. It must not touch this run: the command it skips is
+    almost always the repo-wide suite (`python3 -m pytest -q` shares a prefix
+    with any pytest acceptance command), which is precisely the command whose
+    pre-existing failures the baseline exists to record. Skipping it produced a
+    baseline that was silent about the only part of the gate that ratchets.
+    """
+    if not ticket.get("full_gate"):
+        return []
+    kills = ticket.get("kill_conditions") or {}
+    return run_commands(
+        root, list(ticket["full_gate"]),
+        deny_network=(kills.get("network_access") == "deny"),
+        flag_paths=declared_paths(ticket),
+        timeout_s=command_timeout(ticket),
+    )
+
+
+def probe_full_gate(ticket: dict, results: list[CommandResult]) -> list[FrozenBlock]:
+    """Failures landing in a frozen file, for the approve-time warning.
 
     ADVISORY ONLY. Before the implementation exists, "fails naming the frozen
     test" is precisely what red looks like, so nothing here can separate a gate
@@ -510,26 +687,137 @@ def probe_full_gate(root: Path, ticket: dict) -> list[FrozenBlock]:
     Being wrong now costs a missed warning rather than a blocked approve, and
     the promotion check - which does not skip - covers the blind spot.
     """
-    frozen = ticket.get("frozen") or []
-    full = ticket.get("full_gate") or []
-    if not frozen or not full:
+    if not ticket.get("frozen"):
         return []
-
     skip = {_command_prefix(c) for c in ticket.get("acceptance") or []}
-    to_run = [c for c in full if _command_prefix(c) not in skip]
-    if not to_run:
-        return []
+    kept = [c for c in results if _command_prefix(c.command) not in skip]
+    return frozen_blocks(kept, ticket)
 
-    kills = ticket.get("kill_conditions") or {}
-    results = run_commands(
-        root, to_run,
-        deny_network=(kills.get("network_access") == "deny"),
-        flag_paths=declared_paths(ticket),
-    )
-    return frozen_blocks(results, ticket)
+
+def build_baseline(root: Path, results: list[CommandResult]) -> dict:
+    """The pre-existing failure set, as measured at approve time.
+
+    This is the answer to the question a repo-wide full_gate cannot otherwise
+    survive: on a codebase with any existing red, "did the agent break
+    something" is not the same question as "is the suite green", and only the
+    first one is the agent's responsibility. Without a baseline the gate asks
+    the second, so no ticket ever promotes evidence and the failure is reported
+    as the agent's.
+
+    Recorded, not inferred: the commit and timestamp travel with the keys, so a
+    record derived from this baseline can say what it was ratcheted against
+    rather than leaving a reader to assume it was current.
+    """
+    return {
+        "taken_at": datetime.now(timezone.utc).isoformat(),
+        "commit": git(root, "rev-parse", "HEAD"),
+        "commands": {
+            c.command: {"exit_code": c.exit_code, "keys": c.failure_keys}
+            for c in results
+        },
+    }
+
+
+def baseline_growth(old: dict, new: dict) -> list[str]:
+    """How a re-approval's baseline is WORSE than the one it would replace.
+
+    A ratchet is only a ratchet if widening it is deliberate. Left alone,
+    re-approving after the repo has picked up new failures silently folds them
+    into "pre-existing", and from then on the gate certifies breakage it was
+    built to catch - the coarse lint key makes this easy, since a new finding
+    landing on a file and rule already in the baseline is invisible to a
+    set comparison. Growth therefore needs --rebaseline; shrinking never does.
+    """
+    grown = []
+    old_cmds = (old or {}).get("commands") or {}
+    for cmd, entry in ((new or {}).get("commands") or {}).items():
+        before = old_cmds.get(cmd)
+        if before is None:
+            continue  # a command that is new to the ticket has nothing to widen
+        added = new_failure_keys(entry.get("keys"), before.get("keys"))
+        if added:
+            grown.append(f"{cmd!r} now also fails: {', '.join(added)}")
+        elif added is None and before.get("keys") is not None:
+            # Was comparable, is not any more. Adopting that silently retires
+            # the ratchet on this command without saying so.
+            grown.append(
+                f"{cmd!r} no longer reports failures this gate can identify, "
+                f"so it can no longer be ratcheted"
+            )
+    return grown
 
 
 # --- commands --------------------------------------------------------------
+
+
+def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[CommandResult]:
+    """Run the acceptance commands before the work exists and require them to
+    fail. Returns the results; refuses approval otherwise.
+
+    Everything downstream rests on the frozen tests having teeth. Nothing
+    checked that. A test that asserts nothing passes before the work exists,
+    sails through the gate on the first iteration, and promotes evidence for an
+    implementation nobody wrote - the freeze mechanism faithfully protecting a
+    contract that says nothing.
+    """
+    kills = ticket.get("kill_conditions") or {}
+    red = run_commands(
+        root, commands,
+        deny_network=(kills.get("network_access") == "deny"),
+        flag_paths=declared_paths(ticket),
+        timeout_s=command_timeout(ticket),
+    )
+    # A command that was killed is not red. It produced no result at all, and
+    # accepting it would lock in a "proof" that the test can fail on the
+    # strength of a hang - the weakest possible evidence wearing the strongest
+    # label. Refuse rather than record it.
+    killed = [c for c in red if c.timed_out]
+    if killed:
+        die(
+            "acceptance command(s) timed out during the red proof: "
+            + "; ".join(f"{c.command!r} after {c.duration_s}s" for c in killed)
+            + ". A killed command reported no result, so it is not evidence the "
+            "test can fail. Fix the hang, or raise "
+            "kill_conditions.command_timeout_s if the command is merely slow."
+        )
+    if all(c.ok for c in red):
+        die(
+            "acceptance commands already pass, so freezing them proves nothing: "
+            "either they assert nothing, or the implementation already exists. "
+            "Approval happens before the work. Re-run with --allow-passing only "
+            "if you are deliberately re-approving a ticket already implemented."
+        )
+    return red
+
+
+def refuse_silent_widening(root: Path, ticket_id: str, baseline: dict) -> None:
+    prior = approval_meta(root, ticket_id).get("full_gate_baseline") or {}
+    grown = baseline_growth(prior, baseline)
+    if grown:
+        die(
+            "this would widen the full_gate baseline: "
+            + "; ".join(grown)
+            + ". Adopting that silently would make the gate treat newly broken "
+            "things as pre-existing, which is the failure the baseline exists to "
+            "catch. Fix them, or re-run with --rebaseline to record the wider "
+            "baseline deliberately."
+        )
+
+
+def print_baseline(baseline: dict) -> None:
+    pre = {
+        cmd: e["keys"]
+        for cmd, e in baseline["commands"].items()
+        if e["exit_code"] != 0
+    }
+    if not pre:
+        print("  full_gate baseline: clean")
+        return
+    for cmd, keys in pre.items():
+        n = "unidentifiable" if keys is None else str(sum(keys.values()))
+        print(f"  full_gate baseline: {n} pre-existing failure(s) in {cmd}")
+        if keys is None:
+            print("    ! cannot be ratcheted; this command stays all-or-nothing")
 
 
 def cmd_approve(args) -> int:
@@ -558,11 +846,16 @@ def cmd_approve(args) -> int:
                 "pip install -r requirements-gate.txt"
             )
 
+    probe = run_full_gate_probe(root, ticket)
+    baseline = build_baseline(root, probe) if probe else None
+    if baseline and not args.rebaseline:
+        refuse_silent_widening(root, ticket["id"], baseline)
+
     # Advisory, not a refusal: at this moment a full_gate failure inside the
     # frozen test is indistinguishable from the red this ticket is supposed to
     # be in. Blocking on it refuses well-formed tickets; the session makes the
     # same call at promotion, where acceptance is green and the answer is real.
-    for block in probe_full_gate(root, ticket):
+    for block in probe_full_gate(ticket, probe):
         warn(
             "full_gate may be unwinnable: " + block.describe() + ". The agent may "
             "not edit a frozen file, so if this failure survives the implementation "
@@ -571,26 +864,7 @@ def cmd_approve(args) -> int:
             "promotion, where the answer is decidable."
         )
 
-    red = []
-    # Everything downstream rests on the frozen tests having teeth. Nothing
-    # checked that. A test that asserts nothing passes before the work exists,
-    # sails through the gate on the first iteration, and promotes evidence for
-    # an implementation nobody wrote - the freeze mechanism faithfully
-    # protecting a contract that says nothing.
-    if prove_red:
-        kills = ticket.get("kill_conditions") or {}
-        red = run_commands(
-            root, commands,
-            deny_network=(kills.get("network_access") == "deny"),
-            flag_paths=declared_paths(ticket),
-        )
-        if all(c.ok for c in red):
-            die(
-                "acceptance commands already pass, so freezing them proves nothing: "
-                "either they assert nothing, or the implementation already exists. "
-                "Approval happens before the work. Re-run with --allow-passing only "
-                "if you are deliberately re-approving a ticket already implemented."
-            )
+    red = prove_red_or_die(root, ticket, commands) if prove_red else []
 
     hashes = {rel: sha256(root / rel) for rel in frozen}
     lock = dict(hashes)
@@ -610,6 +884,10 @@ def cmd_approve(args) -> int:
             {"command": c.command, "exit_code": c.exit_code} for c in red if not c.ok
         ]
         or None,
+        # What was already failing before the work began. The session subtracts
+        # this at promotion so a pre-existing failure is attributed to the repo
+        # rather than to the agent.
+        "full_gate_baseline": baseline,
     }
     out = root / ".edad" / "hashes" / f"{ticket['id']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -623,6 +901,8 @@ def cmd_approve(args) -> int:
             print(f"    [{c.exit_code}] {c.command}")
     else:
         print("  ! no red proof recorded (--allow-passing)")
+    if baseline:
+        print_baseline(baseline)
     return 0
 
 
@@ -644,8 +924,8 @@ def evaluate(
         base_ref=base_ref,
         gate=gate_name,
         freeze_ok=True,
-        scope_ok=True,
         commands_ok=False,
+        scope_enforced=bool(kills.get("diff_touches_outside_scope", True)),
     )
 
     meta = approval_meta(root, ticket["id"])
@@ -672,11 +952,14 @@ def evaluate(
     rec.violations += freeze_problems
 
     rec.changed_files = changed_files(root, base_ref)
-    rec.scope_ok, scope_problems = check_scope(ticket, rec.changed_files)
-    if kills.get("diff_touches_outside_scope", True):
-        rec.violations += scope_problems
-    else:
-        rec.scope_ok = True
+    # Measure unconditionally. The policy decides whether this counts against
+    # the verdict, never whether it is recorded: an unenforced violation is
+    # still a fact about this diff, and a reader of the record is entitled to
+    # it. `violations` stays the list of reasons the run FAILED, so an
+    # unenforced stray belongs in scope_violations alone.
+    _, rec.scope_violations = check_scope(ticket, rec.changed_files)
+    if rec.scope_enforced:
+        rec.violations += rec.scope_violations
 
     # A tampered acceptance test invalidates the run. Do not execute it.
     if not rec.freeze_ok:
@@ -686,13 +969,44 @@ def evaluate(
             root, commands,
             deny_network=(kills.get("network_access") == "deny"),
             flag_paths=declared_paths(ticket),
+            timeout_s=command_timeout(ticket),
         )
         rec.commands_ok = all(c.ok for c in rec.commands)
         rec.violations += [
-            f"command failed ({c.exit_code}): {c.command}" for c in rec.commands if not c.ok
+            (
+                f"command timed out after {c.duration_s}s (no result): {c.command}"
+                if c.timed_out
+                else f"command failed ({c.exit_code}): {c.command}"
+            )
+            for c in rec.commands
+            if not c.ok
         ]
+        if gate_name == "full_gate" and not rec.commands_ok:
+            apply_ratchet(rec, meta.get("full_gate_baseline") or {})
 
     return rec
+
+
+def apply_ratchet(rec: Record, baseline: dict) -> None:
+    """Subtract the approve-time baseline from this run's failures.
+
+    Only meaningful for full_gate, which runs repo-wide: on a codebase carrying
+    any existing red, "is the suite green" and "did this change break something"
+    are different questions, and only the second one is the agent's. Without
+    this the gate asks the first, attributes the answer to the agent, and
+    promotes evidence for nothing - ever.
+    """
+    rec.baseline_commit = baseline.get("commit")
+    entries = baseline.get("commands") or {}
+    for c in rec.commands:
+        if c.ok:
+            continue
+        before = entries.get(c.command)
+        added = new_failure_keys(c.failure_keys, before.get("keys")) if before else None
+        if added is None:
+            rec.uncomparable_failures.append(c.command)
+        else:
+            rec.new_failures[c.command] = added
 
 
 def cmd_run(args) -> int:
@@ -711,6 +1025,7 @@ def write_record(root: Path, rec: Record) -> Path:
     stamp = rec.started_at.replace(":", "").replace("-", "")[:15]
     path = d / f"{rec.ticket}-{stamp}-{rec.commit[:8]}.json"
     payload = asdict(rec)
+    payload["scope_ok"] = rec.scope_ok
     payload["passed"] = rec.passed
     path.write_text(json.dumps(payload, indent=2) + "\n")
     return path
@@ -722,12 +1037,30 @@ def report(rec: Record) -> None:
 
     print(f"\n{rec.ticket} @ {rec.commit[:8]}  [{rec.gate}]")
     print(f"  freeze   {mark(rec.freeze_ok)}")
-    print(f"  scope    {mark(rec.scope_ok)}  ({len(rec.changed_files)} file(s) changed)")
+    scope_note = "" if rec.scope_enforced else "  (measured, not enforced)"
+    print(
+        f"  scope    {mark(rec.scope_ok)}  "
+        f"({len(rec.changed_files)} file(s) changed){scope_note}"
+    )
+    if not rec.scope_ok and not rec.scope_enforced:
+        # The stray never reaches `violations` when the ticket switched the
+        # kill condition off, so without this the run prints a clean scope line
+        # and the reader never learns the diff left its declared boundary.
+        for v in rec.scope_violations:
+            print(f"  ~ {v} (diff_touches_outside_scope is off; not counted)")
     print(f"  commands {mark(rec.commands_ok)}")
     for c in rec.commands:
-        print(f"    [{c.exit_code}] {c.duration_s}s  {c.command}")
+        killed = "  KILLED (no result)" if c.timed_out else ""
+        print(f"    [{c.exit_code}] {c.duration_s}s  {c.command}{killed}")
     for v in rec.violations:
         print(f"  ! {v}")
+    if rec.gate == "full_gate" and not rec.commands_ok:
+        base = (rec.baseline_commit or "")[:8] or "none recorded"
+        print(f"  baseline {base}")
+        for c, keys in sorted(rec.new_failures.items()):
+            print(f"    {'new: ' + ', '.join(keys) if keys else 'nothing new'}  ({c})")
+        for c in rec.uncomparable_failures:
+            print(f"    ! not comparable against the baseline: {c}")
     if rec.decisions:
         print(f"  decisions {', '.join(rec.decisions)}")
     if rec.approved and not rec.ticket_verified:
@@ -759,6 +1092,9 @@ def main() -> int:
     a.add_argument("ticket")
     a.add_argument("--allow-passing", action="store_true",
                    help="approve even if the acceptance commands already pass")
+    a.add_argument("--rebaseline", action="store_true",
+                   help="deliberately widen the full_gate baseline to include failures "
+                        "that appeared since the last approval")
     a.set_defaults(func=cmd_approve)
 
     r = sub.add_parser("run", help="verify a ticket and write an evidence record")
