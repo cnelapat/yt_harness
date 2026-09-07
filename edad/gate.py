@@ -25,6 +25,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -206,6 +207,38 @@ def run_commands(root: Path, commands: list[str], deny_network: bool) -> list[Co
     return results
 
 
+def gate_toolchain_problems(root: Path) -> list[str]:
+    """Compare the versions the GATE will resolve against requirements-gate.txt.
+
+    Deliberately shells out rather than importing here: run_commands executes
+    through a shell, so a pin satisfied inside this interpreter proves nothing
+    about the one `python3 -m pytest` actually reaches. Both approve and the
+    session controller need this - approve because a missing pytest makes the
+    acceptance commands "fail" for the wrong reason, which reads as red and
+    would let a vacuous test through the check below.
+    """
+    req = root / "requirements-gate.txt"
+    if not req.exists():
+        return []
+    problems = []
+    for raw in req.read_text().splitlines():
+        line = raw.split("#")[0].strip()
+        if "==" not in line:
+            continue
+        name, _, pinned = line.partition("==")
+        name, pinned = name.strip(), pinned.strip()
+        code = f"from importlib.metadata import version; print(version({name!r}))"
+        proc = subprocess.run(
+            f"python3 -c {shlex.quote(code)}",
+            cwd=root, shell=True, capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            problems.append(f"{name}: not installed for the gate's python3 (pinned {pinned})")
+        elif proc.stdout.strip() != pinned:
+            problems.append(f"{name}: {proc.stdout.strip()}, pinned {pinned}")
+    return problems
+
+
 # --- commands --------------------------------------------------------------
 
 
@@ -215,18 +248,60 @@ def cmd_approve(args) -> int:
     frozen = ticket.get("frozen") or []
     if not frozen:
         die("ticket declares no frozen files; nothing to approve")
-    hashes = {}
     for rel in frozen:
-        p = root / rel
-        if not p.exists():
+        if not (root / rel).exists():
             die(f"frozen file does not exist: {rel}")
-        hashes[rel] = sha256(p)
+
+    # Everything downstream rests on the frozen tests having teeth. Nothing
+    # checked that. A test that asserts nothing passes before the work exists,
+    # sails through the gate on the first iteration, and promotes evidence for
+    # an implementation nobody wrote - the freeze mechanism faithfully
+    # protecting a contract that says nothing.
+    red = []
+    commands = ticket.get("acceptance") or []
+    if commands and not args.allow_passing:
+        problems = gate_toolchain_problems(root)
+        if problems:
+            die(
+                "cannot prove the acceptance commands fail: the gate's toolchain does "
+                "not match requirements-gate.txt: " + "; ".join(problems) + ". A missing "
+                "tool fails for the wrong reason and would read as red. Install the "
+                "pins: pip install -r requirements-gate.txt"
+            )
+        kills = ticket.get("kill_conditions") or {}
+        red = run_commands(
+            root, commands, deny_network=(kills.get("network_access") == "deny")
+        )
+        if all(c.ok for c in red):
+            die(
+                "acceptance commands already pass, so freezing them proves nothing: "
+                "either they assert nothing, or the implementation already exists. "
+                "Approval happens before the work. Re-run with --allow-passing only "
+                "if you are deliberately re-approving a ticket already implemented."
+            )
+
+    hashes = {rel: sha256(root / rel) for rel in frozen}
+    lock = dict(hashes)
+    # Reserved key: frozen entries are relative paths and never collide with it.
+    lock["_edad"] = {
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "red_proof": [
+            {"command": c.command, "exit_code": c.exit_code} for c in red if not c.ok
+        ]
+        or None,
+    }
     out = root / ".edad" / "hashes" / f"{ticket['id']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(hashes, indent=2) + "\n")
+    out.write_text(json.dumps(lock, indent=2) + "\n")
     print(f"approved {ticket['id']}: {len(hashes)} frozen file(s)")
     for rel, h in hashes.items():
         print(f"  {h[:12]}  {rel}")
+    if red:
+        print("  red proof (these failed before the work existed):")
+        for c in red:
+            print(f"    [{c.exit_code}] {c.command}")
+    else:
+        print("  ! no red proof recorded (--allow-passing)")
     return 0
 
 
@@ -319,6 +394,8 @@ def main() -> int:
 
     a = sub.add_parser("approve", help="record hashes of the ticket's frozen files")
     a.add_argument("ticket")
+    a.add_argument("--allow-passing", action="store_true",
+                   help="approve even if the acceptance commands already pass")
     a.set_defaults(func=cmd_approve)
 
     r = sub.add_parser("run", help="verify a ticket and write an evidence record")

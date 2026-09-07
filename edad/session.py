@@ -37,6 +37,7 @@ from edad.gate import (
     changed_files,
     check_freeze,
     evaluate,
+    gate_toolchain_problems,
     git,
     load_ticket,
     repo_root,
@@ -56,38 +57,6 @@ MAX_NO_PROGRESS = 2
 
 class Abort(Exception):
     """Stop the session. Carries the reason recorded in the session log."""
-
-
-def gate_toolchain_problems(root: Path) -> list[str]:
-    """Compare the versions the GATE will resolve against requirements-gate.txt.
-
-    Deliberately shells out rather than importing here: evaluate() runs its
-    commands through a shell, so a pin satisfied inside this interpreter proves
-    nothing about the one `python3 -m pytest` actually reaches. A worktree is a
-    fresh checkout with no .venv, so an inherited PATH is the only thing making
-    the pinned toolchain available - and if it is missing, the gate reports the
-    toolchain's failure as the code's.
-    """
-    req = root / "requirements-gate.txt"
-    if not req.exists():
-        return []
-    problems = []
-    for raw in req.read_text().splitlines():
-        line = raw.split("#")[0].strip()
-        if "==" not in line:
-            continue
-        name, _, pinned = line.partition("==")
-        name, pinned = name.strip(), pinned.strip()
-        code = f"from importlib.metadata import version; print(version({name!r}))"
-        proc = subprocess.run(
-            f"python3 -c {shlex.quote(code)}",
-            cwd=root, shell=True, capture_output=True, text=True, check=False,
-        )
-        if proc.returncode != 0:
-            problems.append(f"{name}: not installed for the gate's python3 (pinned {pinned})")
-        elif proc.stdout.strip() != pinned:
-            problems.append(f"{name}: {proc.stdout.strip()}, pinned {pinned}")
-    return problems
 
 
 def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
