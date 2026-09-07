@@ -89,8 +89,12 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
             "rather than the code, and feeds that to the agent as evidence. "
             "Install the pins: pip install -r requirements-gate.txt"
         )
-    if ticket.get("status") != "approved":
-        raise Abort(f"ticket status is {ticket.get('status')!r}, expected 'approved'")
+    # Approval is the lock, not a field. A ticket asserting `status: approved`
+    # was the ticket vouching for itself: it added a way to be wrong (a hand-set
+    # field on an unapproved ticket) and no way to be right, since nothing could
+    # be concluded from it that the lock did not already prove. What approval
+    # actually means is what these two lines check - a lock exists, and its
+    # hashes still match the tree.
     if not (root / ".edad" / "hashes" / f"{ticket['id']}.json").exists():
         raise Abort("no approval lock; run 'python -m edad.gate approve <ticket>'")
 

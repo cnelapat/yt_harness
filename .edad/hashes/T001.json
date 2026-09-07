@@ -1,8 +1,8 @@
 {
   "tests/test_acceptance_converter.py": "8ede006354f6cff85eae1bf33c38949bafb4c6ef94301463a6dc019b62001a72",
   "_edad": {
-    "approved_at": "2026-09-07T01:47:30.722225+00:00",
-    "ticket_sha256": "71e26fce933e0006a299a66f48a892396cc7ee81c2bbea6d951862800886887f",
+    "approved_at": "2026-09-07T01:48:08.102170+00:00",
+    "ticket_sha256": "56082bb547a9e642a58dc87b1d6cd8dff9550ca40baa3fb0e681201559672e3a",
     "decisions": [],
     "red_proof": [
       {

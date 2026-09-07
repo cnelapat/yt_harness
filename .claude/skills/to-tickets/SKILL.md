@@ -74,9 +74,7 @@ clean tree when you want the proof back.
 id: T00N
 spec: <path to the spec, or null>
 title: <one line, imperative>
-status: approved              # the session refuses anything else
-approved_by: <name>
-approved_at: null
+approved_by: <name>           # provenance only; nothing reads it
 
 decisions:                    # grill-record ids this ticket's gate discharges;
   - D1                        # copied into the approval lock and every evidence
@@ -137,13 +135,18 @@ diff touches nothing outside `scope`.
 - **`acceptance` and `full_gate` run through a shell, verbatim.** Use `python3 -m
   pytest`, not `pytest`: the bare name resolves through PATH and can be a different
   interpreter than the one the pins were installed into.
-- **`full_gate` must be winnable, and `approve` checks it.** It runs repo-wide, so a
-  lint error in a file no ticket may touch makes every ticket unpassable and promotes
-  no evidence, ever. `approve` runs the `full_gate` commands that are not already in
-  `acceptance` and refuses the ticket if a failure names a frozen path. It skips
-  commands sharing their first three tokens with an acceptance command, because those
-  are supposed to be red before the implementation exists — so the check can miss, but
-  it will not block a well-formed ticket.
+- **`full_gate` must be winnable. `approve` warns; the session decides.** It runs
+  repo-wide, so a lint error in a file no ticket may touch makes every ticket
+  unpassable and promotes no evidence, ever. The check is split by when, because the
+  evidence to make it is only available late: at approve time "fails naming the frozen
+  test" is also exactly what the expected red looks like, so approve prints a warning
+  and continues rather than refusing well-formed tickets. At promotion the acceptance
+  commands have passed, so the same failure cannot be unfinished work — the session
+  stops with outcome `unwinnable`, distinct from `aborted`, because the ticket was the
+  defect and not the agent.
+
+  A failure naming a frozen path *and* a path in `scope` is not unwinnable: the agent
+  could have fixed it, and it is reported as an ordinary failure.
 
   When it fires, fix the repo or the tool's configuration, never the frozen file. The
   usual cause is a linter that has not been told something: `ruff check .` flagging
@@ -163,5 +166,9 @@ diff touches nothing outside `scope`.
 
 State for each ticket: its id, what it makes work, its blockers, the decision ids it
 discharges, and the exact command that decides it. Then confirm with the user before
-running `edad.gate approve`. Approval freezes the tests; changing them afterwards invalidates every record that
-cites them.
+running `edad.gate approve`. Approval hashes the acceptance tests *and the ticket file
+itself* into the lock, so `scope`, `acceptance`, `kill_conditions` and `decisions` are
+part of the contract too — editing any of them afterwards fails the freeze check until
+you re-approve. Nothing records approval inside the ticket: the lock's existence is the
+approval, and `_edad.approved_at` is its timestamp. A ticket that claimed its own
+`status: approved` was vouching for itself.
