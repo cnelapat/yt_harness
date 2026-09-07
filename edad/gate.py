@@ -251,27 +251,33 @@ VERSION_PROBES = {
 _VERSION_RE = re.compile(r"\b(\d+(?:\.\d+)+)\b")
 
 
-def _probe_version(root: Path, name: str) -> str | None:
-    """Resolve a version the way the gate's shell will: metadata first, then the
-    tool's own --version. Returns None when neither can see it."""
+def _probe_versions(root: Path, name: str) -> tuple[str | None, str | None]:
+    """(version importlib.metadata sees, version the PATH binary reports).
+
+    Both, deliberately, because which one the gate actually runs is a property
+    of how the command was written: `python3 -m pytest` resolves through
+    metadata, a bare `ruff check .` runs whatever is first on PATH. Returning
+    one and guessing hides exactly the drift this module exists to catch - a
+    pip-installed ruff satisfying the pin while an older one earlier on PATH is
+    the binary full_gate shells out to.
+    """
     code = f"from importlib.metadata import version; print(version({name!r}))"
     proc = subprocess.run(
         f"python3 -c {shlex.quote(code)}",
         cwd=root, shell=True, capture_output=True, text=True, check=False,
     )
-    if proc.returncode == 0 and proc.stdout.strip():
-        return proc.stdout.strip()
+    meta = proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
 
+    on_path = None
     probe = VERSION_PROBES.get(name)
-    if not probe:
-        return None
-    proc = subprocess.run(
-        probe, cwd=root, shell=True, capture_output=True, text=True, check=False,
-    )
-    if proc.returncode != 0:
-        return None
-    m = _VERSION_RE.search(proc.stdout + proc.stderr)
-    return m.group(1) if m else None
+    if probe:
+        proc = subprocess.run(
+            probe, cwd=root, shell=True, capture_output=True, text=True, check=False,
+        )
+        if proc.returncode == 0:
+            m = _VERSION_RE.search(proc.stdout + proc.stderr)
+            on_path = m.group(1) if m else None
+    return meta, on_path
 
 
 def gate_toolchain_problems(root: Path) -> list[str]:
@@ -294,10 +300,20 @@ def gate_toolchain_problems(root: Path) -> list[str]:
             continue
         name, _, pinned = line.partition("==")
         name, pinned = name.strip(), pinned.strip()
-        found = _probe_version(root, name)
+        meta, on_path = _probe_versions(root, name)
+        found = meta or on_path
         if found is None:
             where = "the gate's python3 or PATH" if name in VERSION_PROBES else "the gate's python3"
             problems.append(f"{name}: not found on {where} (pinned {pinned})")
+        elif meta and on_path and meta != on_path:
+            # Neither is wrong; they disagree, and which one runs depends on how
+            # each command is spelled. That ambiguity is itself the defect: the
+            # verdict must be a property of the commit, not of argv.
+            problems.append(
+                f"{name}: {meta} importable but {on_path} first on PATH "
+                f"(pinned {pinned}); which one runs depends on how the command "
+                f"is written"
+            )
         elif found != pinned:
             problems.append(f"{name}: {found}, pinned {pinned}")
     return problems
