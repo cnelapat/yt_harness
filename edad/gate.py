@@ -66,8 +66,18 @@ def git(root: Path, *args: str) -> str:
     return git_raw(root, *args).strip()
 
 
+def ticket_path(root: Path, ticket_id: str) -> Path:
+    """Where the ticket lives in a given tree. A function, not ticket["_path"],
+    because the two differ where it matters: the controller loads the ticket
+    from the main repo and then evaluates against a worktree. check_freeze must
+    hash the copy in the tree it is verifying - .edad/ is in INFRA_PREFIXES and
+    so is invisible to the scope check, which means an agent editing the ticket
+    inside its own worktree is exactly the case that needs catching."""
+    return root / ".edad" / "tickets" / f"{ticket_id}.md"
+
+
 def load_ticket(root: Path, ticket_id: str) -> dict:
-    path = root / ".edad" / "tickets" / f"{ticket_id}.md"
+    path = ticket_path(root, ticket_id)
     if not path.exists():
         die(f"no ticket at {path}")
     text = path.read_text()
@@ -122,6 +132,14 @@ class Record:
     # before the work began, and it passes now.
     decisions: list[str] = field(default_factory=list)
     red_proof: list[dict] | None = None
+    # Whether an approval lock with an _edad block was found at all. Without it
+    # a missing red_proof cannot be read as "approved with --allow-passing" -
+    # see report(), which used to assert that flag either way.
+    approved: bool = False
+    # Whether that lock pinned the ticket's own bytes. A lock predating that
+    # field still verifies the frozen tests, but cannot say the ticket was the
+    # one approved - a weaker claim, and the record should say which it makes.
+    ticket_verified: bool = False
 
     @property
     def passed(self) -> bool:
@@ -132,15 +150,43 @@ class Record:
 
 
 def check_freeze(root: Path, ticket: dict) -> tuple[bool, list[str]]:
-    """Acceptance tests must be byte-identical to the approved snapshot."""
+    """The acceptance tests AND the ticket itself must be byte-identical to what
+    was approved.
+
+    Hashing only the frozen tests protected the contract's tests while leaving
+    the contract editable. The ticket sits under .edad/, which INFRA_PREFIXES
+    excludes from every scope check, so it was neither hashed nor diffed:
+    acceptance, scope, kill_conditions and decisions could all be rewritten
+    after approval with nothing in the system able to notice. Decisions were
+    just the first field where that showed. One hash over the file closes the
+    whole class.
+    """
     frozen = ticket.get("frozen") or []
-    if not frozen:
-        return True, []
     lock_path = root / ".edad" / "hashes" / f"{ticket['id']}.json"
     if not lock_path.exists():
+        if not frozen:
+            return True, []
         return False, [f"no approval lock at {lock_path}; run 'approve' first"]
     approved = json.loads(lock_path.read_text())
     problems = []
+
+    meta = approved.get(LOCK_META_KEY)
+    expected_ticket = meta.get("ticket_sha256") if isinstance(meta, dict) else None
+    if expected_ticket:
+        tp = ticket_path(root, ticket["id"])
+        if not tp.exists():
+            problems.append(f"ticket file deleted: {tp}")
+        else:
+            actual = sha256(tp)
+            if actual != expected_ticket:
+                problems.append(
+                    f"ticket modified since approval: {tp.name} "
+                    f"(approved {expected_ticket[:12]}, now {actual[:12]}). "
+                    f"Every field it declares - acceptance, scope, "
+                    f"kill_conditions, decisions - is part of the contract. "
+                    f"Re-approve to adopt the change."
+                )
+
     for rel in frozen:
         p = root / rel
         if not p.exists():
@@ -440,6 +486,11 @@ def cmd_approve(args) -> int:
     # Reserved key: frozen entries are relative paths and never collide with it.
     lock[LOCK_META_KEY] = {
         "approved_at": datetime.now(timezone.utc).isoformat(),
+        # The ticket file's own bytes, so the contract is tamper-evident and not
+        # just the tests it points at. Everything else in this block is data
+        # copied OUT of the ticket; this is what makes the ticket itself
+        # citable, and what lets the fields below be trusted at read time.
+        "ticket_sha256": sha256(ticket_path(root, ticket["id"])),
         # The decisions this ticket discharges, copied from the ticket so the
         # lock and every record derived from it name them without re-reading
         # the ticket, which may have been edited since.
@@ -487,8 +538,25 @@ def evaluate(
     )
 
     meta = approval_meta(root, ticket["id"])
-    rec.decisions = list(ticket.get("decisions") or meta.get("decisions") or [])
+    # The lock wins: it records the approval, the ticket only proposes it.
+    # check_freeze now hashes the ticket too, so the two agree or the run has
+    # already failed - which makes reading the approval record first a
+    # redundancy rather than the thing holding the property up. Before that
+    # hash existed this line was the property, and it had it backwards.
+    rec.approved = bool(meta)
+    rec.ticket_verified = bool(meta.get("ticket_sha256"))
+    if "decisions" in meta:
+        # Presence, not truthiness: an approval that recorded [] is asserting
+        # this ticket discharges no decisions. `or` would treat that answer as
+        # a missing one and fall through to the ticket - reintroducing the bug.
+        rec.decisions = list(meta["decisions"])
+    else:
+        # No lock, or one predating the _edad block: nothing was captured at
+        # approval, so the ticket is the only source available. It carries none
+        # of the lock's guarantees.
+        rec.decisions = list(ticket.get("decisions") or [])
     rec.red_proof = meta.get("red_proof")
+
     rec.freeze_ok, freeze_problems = check_freeze(root, ticket)
     rec.violations += freeze_problems
 
@@ -549,15 +617,24 @@ def report(rec: Record) -> None:
         print(f"  ! {v}")
     if rec.decisions:
         print(f"  decisions {', '.join(rec.decisions)}")
+    if rec.approved and not rec.ticket_verified:
+        print("  ! approval lock predates ticket hashing: the frozen tests were "
+              "verified, the ticket's own fields were not")
     if rec.red_proof:
         print(f"  red proof at approval: {len(rec.red_proof)} command(s) failed")
-    elif rec.commands_ok:
+    elif rec.commands_ok and rec.approved:
         # A pass with no red proof is a weaker claim, and saying so is the
         # difference between "the test passes" and "a test that could fail,
         # passes". Not a failure - --allow-passing is legitimate - but the
         # record should not let a reader assume the stronger claim.
         print("  ! no red proof at approval (--allow-passing): "
               "this pass does not show the test can fail")
+    elif rec.commands_ok:
+        # Distinct from the case above: there is no approval metadata to have
+        # recorded a proof. Naming --allow-passing here would blame a flag
+        # nobody passed.
+        print("  ! no approval metadata for this ticket: this pass cites no red "
+              "proof, and none was recorded. Run approve to establish one.")
     print(f"  => {mark(rec.passed)}\n")
 
 
