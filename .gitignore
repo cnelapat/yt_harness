@@ -19,3 +19,8 @@ venv/
 # Session logs are telemetry, like records. Worktrees are scratch.
 .edad/sessions/
 .edad/worktrees/
+
+# Claude Code writes this per-machine during a session. Uncommitted it shows up
+# as a stray in the agent's diff and trips the scope check on an innocent ticket.
+# .claude/skills/ IS committed - the method ships with the harness.
+.claude/settings.local.json
