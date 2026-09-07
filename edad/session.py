@@ -58,7 +58,6 @@ MAX_NO_PROGRESS = 2
 class Abort(Exception):
     """Stop the session. Carries the reason recorded in the session log."""
 
-
 def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     """Refuse to start rather than fail expensively halfway through."""
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -97,33 +96,49 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     if not dry_run:
         if not shutil.which("claude"):
             raise Abort("the 'claude' CLI is not on PATH")
-        if not agent_has_credential():
+        if agent_has_credential() is False:
             raise Abort(
-                "the 'claude' CLI has no credential. Run 'claude setup-token' and "
-                "export CLAUDE_CODE_OAUTH_TOKEN, or 'claude auth login'."
+                "the 'claude' CLI reports it is not logged in. Run 'claude setup-token' "
+                "and export CLAUDE_CODE_OAUTH_TOKEN, or 'claude auth login'."
             )
         if sandbox == "docker" and not shutil.which("docker"):
             raise Abort("--sandbox docker requested but docker is not on PATH")
 
 
-def agent_has_credential() -> bool:
+def agent_has_credential() -> bool | None:
     """Whether the CLI has *a* credential: an exported token or a keychain login.
+    True yes, False no, None the CLI could not answer.
 
     Requiring CLAUDE_CODE_OAUTH_TOKEN was wrong - a keychain login runs the
     agent fine, so that check refused sessions that would have worked. This is
     deliberately not a proof that the credential is *valid*: `claude auth
     status` reports loggedIn:true for a malformed token too, so a 401 still
     reaches the loop. MAX_NO_PROGRESS is what catches that.
+
+    The None case matters as much as the False one. `claude auth status` is a
+    real subcommand today and prints JSON with loggedIn, but it is a CLI
+    surface we do not control: a release that renames it, drops it, or stops
+    emitting JSON would turn a preflight convenience into a hard refusal of
+    every session, for a credential that works. So an unrecognized command or
+    unparseable output is "unknown, proceed" - the loop runs, and if the
+    credential really is missing the agent exits non-zero committing nothing
+    and MAX_NO_PROGRESS aborts with the agent's own error. Only an explicit
+    loggedIn:false, which is unambiguous, refuses up front.
     """
-    proc = subprocess.run(
-        ["claude", "auth", "status"], capture_output=True, text=True, check=False
-    )
-    if proc.returncode != 0:
-        return False
     try:
-        return bool(json.loads(proc.stdout).get("loggedIn"))
-    except (json.JSONDecodeError, AttributeError):
-        return False
+        proc = subprocess.run(
+            ["claude", "auth", "status"], capture_output=True, text=True,
+            check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or "loggedIn" not in payload:
+        return None
+    return bool(payload["loggedIn"])
 
 # --- worktree --------------------------------------------------------------
 
@@ -145,22 +160,35 @@ def make_worktree(root: Path, ticket_id: str, base: str) -> tuple[Path, str]:
 # --- prompting -------------------------------------------------------------
 
 
+def network_rule(sandbox: str, cont_indent: str = "") -> str:
+    """The network sentence, matched to the run it is in.
+
+    Under --sandbox none the agent does have the network, and asserting
+    otherwise puts an unenforceable claim in a prompt whose other rules are all
+    mechanically checked. Shared by both prompts: the retry prompt restates the
+    constraints, so a hardcoded "no network" there reintroduces on iteration 2
+    exactly the lie the initial prompt is careful not to tell on iteration 1.
+    """
+    if sandbox == "docker":
+        lines = [
+            "You have no network access: the container runs with --network none.",
+            "Do not attempt installs or downloads.",
+        ]
+    else:
+        lines = [
+            "Do not use the network: no installs, no downloads. The pinned",
+            "toolchain is already present and complete. This run is unsandboxed,",
+            "so unlike the other rules here this one is not mechanically enforced.",
+            "It is still a requirement.",
+        ]
+    return ("\n" + cont_indent).join(lines)
+
+
 def initial_prompt(ticket: dict, sandbox: str = "none") -> str:
     scope = "\n".join(f"  - {s}" for s in ticket.get("scope") or [])
     frozen = "\n".join(f"  - {s}" for s in ticket.get("frozen") or [])
     accept = "\n".join(f"  {c}" for c in ticket.get("acceptance") or [])
-    # Rule 4 must describe the run it is in. Under --sandbox none the agent
-    # does have the network, and asserting otherwise puts an unenforceable
-    # claim in a prompt whose other rules are all mechanically checked.
-    network = (
-        "4. You have no network access: the container runs with --network none.\n"
-        "   Do not attempt installs or downloads."
-        if sandbox == "docker"
-        else "4. Do not use the network: no installs, no downloads. The pinned\n"
-        "   toolchain is already present and complete. This run is unsandboxed,\n"
-        "   so unlike the rules above this one is not mechanically enforced. It\n"
-        "   is still a requirement."
-    )
+    network = f"4. {network_rule(sandbox, cont_indent='   ')}"
     return f"""You are implementing ticket {ticket['id']}: {ticket.get('title', '')}
 
 {ticket.get('_body', '')}
@@ -188,7 +216,7 @@ completion file; nothing you write about your work is read.
 """
 
 
-def retry_prompt(ticket: dict, rec: Record, iteration: int) -> str:
+def retry_prompt(ticket: dict, rec: Record, iteration: int, sandbox: str = "none") -> str:
     fails = "\n\n".join(
         f"$ {c.command}\nexit {c.exit_code}\n{c.output_tail[-1500:]}"
         for c in rec.commands
@@ -201,7 +229,9 @@ This is the verifier's own output, not a summary:
 {fails}
 
 Fix the implementation. The same constraints apply: only the files in scope,
-the frozen tests stay untouched, no network.
+and the frozen tests stay untouched.
+
+{network_rule(sandbox)}
 """
 
 
@@ -421,7 +451,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
                 raise Abort(reason)
             if rec.passed:
                 break
-            prompt = retry_prompt(ticket, rec, n)
+            prompt = retry_prompt(ticket, rec, n, args.sandbox)
         else:
             raise Abort(f"exhausted {max_iter} iterations without passing the gate")
 

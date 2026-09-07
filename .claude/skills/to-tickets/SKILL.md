@@ -21,9 +21,15 @@ body.
 
 **1. Read the source.** Work from the grill record, the spec, or the conversation. If
 the user passes a path or issue reference, read it in full. A grill record's structured
-block already carries `verify`, `scope` and `rejected` per decision: `verify` becomes
-`acceptance`, `scope` becomes `scope`, and the files named in `verify` become `frozen`.
-Carry all three across verbatim. Do not paraphrase a command.
+block already carries `id`, `verify`, `scope` and `rejected` per decision: `verify`
+(a list) becomes `acceptance` (a list), `scope` becomes `scope`, the files named in
+`verify` become `frozen`, and the `id`s of every decision this ticket discharges become
+`decisions`. Carry them across verbatim. Do not paraphrase a command, and do not
+renumber a decision id — the id is what a later evidence record cites.
+
+A decision whose grill entry has `unenforced:` instead of `verify:` has no acceptance
+command by construction. It belongs in the ticket body as context, never in
+`decisions:`, which lists only what this ticket's gate actually proves.
 
 **2. Explore the codebase.** Ticket titles and bodies should use the project's existing
 vocabulary. Confirm every path you are about to put in `scope` — a glob that matches
@@ -36,10 +42,28 @@ that builds a layer. Declare ordering with `blocked_by`: the session controller
 refuses to start a ticket whose blockers have no evidence recorded.
 
 **4. Write the acceptance test first, and make sure it fails.** The test file is
-authored before the implementation and listed under `frozen`. `edad.gate approve`
-refuses a ticket whose acceptance commands already pass, because a test that cannot
-fail proves nothing — so a ticket is not ready until you have watched it go red for
-the right reason.
+authored before the implementation and listed under `frozen`. `edad.gate approve` runs
+the acceptance commands and refuses a ticket whose commands already pass, because a
+test that cannot fail proves nothing — so a ticket is not ready until you have watched
+it go red for the right reason.
+
+What approve records is the *red proof*: each failing command and its exit code, stored
+in the approval lock beside the hashes, and copied into every evidence record the gate
+writes for that ticket. That is what turns "the test passes" into "a test proven
+capable of failing, for decisions D1 and D3, now passes" — the claim an auditor asks
+for and the one a bare green record cannot make.
+
+Approve also refuses when its own toolchain does not match `requirements-gate.txt`: a
+missing pytest fails for the wrong reason, and that reads as red. Fix the pins rather
+than working around the refusal.
+
+**Re-approving an already-implemented ticket needs `--allow-passing`.** You will meet
+this the first time you re-approve after the work exists — editing a frozen test, or
+re-running approve on a finished ticket. The flag skips the red run entirely, so the
+lock records `red_proof: null` and the gate prints `no red proof at approval` on every
+record derived from it. That is the honest outcome, not a formality: use the flag when
+you are deliberately re-approving implemented work, and re-author the test against a
+clean tree when you want the proof back.
 
 **5. Write one file per ticket** at `.edad/tickets/<ID>.md`.
 
@@ -53,6 +77,10 @@ title: <one line, imperative>
 status: approved              # the session refuses anything else
 approved_by: <name>
 approved_at: null
+
+decisions:                    # grill-record ids this ticket's gate discharges;
+  - D1                        # copied into the approval lock and every evidence
+  - D3                        # record, so a green record names what it proves
 
 scope:                        # agent may create/modify ONLY these; globs, matched literally
   - path/to/file.py
@@ -109,16 +137,31 @@ diff touches nothing outside `scope`.
 - **`acceptance` and `full_gate` run through a shell, verbatim.** Use `python3 -m
   pytest`, not `pytest`: the bare name resolves through PATH and can be a different
   interpreter than the one the pins were installed into.
-- **`full_gate` must be winnable.** It runs repo-wide, so a lint error in a file no
-  ticket may touch makes every ticket unpassable and promotes no evidence, ever. Check
-  it passes on a clean tree before writing tickets against it.
+- **`full_gate` must be winnable, and `approve` checks it.** It runs repo-wide, so a
+  lint error in a file no ticket may touch makes every ticket unpassable and promotes
+  no evidence, ever. `approve` runs the `full_gate` commands that are not already in
+  `acceptance` and refuses the ticket if a failure names a frozen path. It skips
+  commands sharing their first three tokens with an acceptance command, because those
+  are supposed to be red before the implementation exists — so the check can miss, but
+  it will not block a well-formed ticket.
+
+  When it fires, fix the repo or the tool's configuration, never the frozen file. The
+  usual cause is a linter that has not been told something: `ruff check .` flagging
+  import order in an acceptance test is ruff not knowing which packages are
+  first-party, not the test being wrong. Editing the frozen file to satisfy it changes
+  a hash the lock depends on; declaring `known-first-party` in `pyproject.toml` leaves
+  the lock and its red proof intact.
 - **Commands must not need the network** when `network_access: deny`.
 - **Keep `max_diff_lines` honest.** Too tight kills good work mid-flight; too loose
   lets an agent rewrite the repo.
+- **`decisions` is copied, not checked.** The gate carries the ids into the lock and
+  the evidence record verbatim; nothing validates that they exist in the grill record.
+  A wrong id produces a record that cites a decision nobody made, which is worse than
+  an empty list — so leave it empty rather than guessing.
 
 ## Before handing off
 
-State for each ticket: its id, what it makes work, its blockers, and the exact command
-that decides it. Then confirm with the user before running `edad.gate approve`.
-Approval freezes the tests; changing them afterwards invalidates every record that
+State for each ticket: its id, what it makes work, its blockers, the decision ids it
+discharges, and the exact command that decides it. Then confirm with the user before
+running `edad.gate approve`. Approval freezes the tests; changing them afterwards invalidates every record that
 cites them.

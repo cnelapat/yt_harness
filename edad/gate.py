@@ -25,6 +25,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -87,7 +88,6 @@ def die(msg: str) -> None:
     print(f"edad: {msg}", file=sys.stderr)
     raise SystemExit(2)
 
-
 @dataclass
 class CommandResult:
     command: str
@@ -113,6 +113,15 @@ class Record:
     violations: list[str] = field(default_factory=list)
     changed_files: list[str] = field(default_factory=list)
     commands: list[CommandResult] = field(default_factory=list)
+    # Traceability, carried from the ticket and the approval lock so the record
+    # stands alone. Without these a passing record says "this command exited 0"
+    # and stops there: which design decision it discharges is in a grill
+    # transcript, and the proof that the same command could fail is in a lock
+    # file nothing cites. Together they let the record say what an auditor
+    # actually asks - this test was proven capable of failing, for decision D1,
+    # before the work began, and it passes now.
+    decisions: list[str] = field(default_factory=list)
+    red_proof: list[dict] | None = None
 
     @property
     def passed(self) -> bool:
@@ -146,6 +155,27 @@ def check_freeze(root: Path, ticket: dict) -> tuple[bool, list[str]]:
                 f"frozen file modified: {rel} (approved {expected[:12]}, now {actual[:12]})"
             )
     return not problems, problems
+
+
+LOCK_META_KEY = "_edad"
+
+
+def approval_meta(root: Path, ticket_id: str) -> dict:
+    """The `_edad` block of the approval lock, or {} when there is no lock.
+
+    Separate from check_freeze, which only needs the hashes. This is what makes
+    the red proof citable: approve records it, and evaluate copies it into the
+    record instead of leaving it in a file nothing reads.
+    """
+    lock_path = root / ".edad" / "hashes" / f"{ticket_id}.json"
+    if not lock_path.exists():
+        return {}
+    try:
+        lock = json.loads(lock_path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    meta = lock.get(LOCK_META_KEY)
+    return meta if isinstance(meta, dict) else {}
 
 
 # The harness writes here. These are not agent output and are never in scope.
@@ -207,6 +237,43 @@ def run_commands(root: Path, commands: list[str], deny_network: bool) -> list[Co
     return results
 
 
+# How to ask a tool its version when importlib.metadata cannot see it.
+# importlib.metadata only knows about installed *Python distributions*, so a
+# Homebrew or standalone-installer ruff — the two common install paths on macOS
+# — is on PATH, is the binary the gate will actually run, and is invisible to
+# it. Reporting that as "not installed" points at the wrong cause and refuses
+# every approve and every session. A pure library with no CLI has no entry
+# here: metadata is the only way to see it, and its absence really is missing.
+VERSION_PROBES = {
+    "pytest": "python3 -m pytest --version",
+    "ruff": "ruff --version",
+}
+_VERSION_RE = re.compile(r"\b(\d+(?:\.\d+)+)\b")
+
+
+def _probe_version(root: Path, name: str) -> str | None:
+    """Resolve a version the way the gate's shell will: metadata first, then the
+    tool's own --version. Returns None when neither can see it."""
+    code = f"from importlib.metadata import version; print(version({name!r}))"
+    proc = subprocess.run(
+        f"python3 -c {shlex.quote(code)}",
+        cwd=root, shell=True, capture_output=True, text=True, check=False,
+    )
+    if proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout.strip()
+
+    probe = VERSION_PROBES.get(name)
+    if not probe:
+        return None
+    proc = subprocess.run(
+        probe, cwd=root, shell=True, capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    m = _VERSION_RE.search(proc.stdout + proc.stderr)
+    return m.group(1) if m else None
+
+
 def gate_toolchain_problems(root: Path) -> list[str]:
     """Compare the versions the GATE will resolve against requirements-gate.txt.
 
@@ -227,15 +294,71 @@ def gate_toolchain_problems(root: Path) -> list[str]:
             continue
         name, _, pinned = line.partition("==")
         name, pinned = name.strip(), pinned.strip()
-        code = f"from importlib.metadata import version; print(version({name!r}))"
-        proc = subprocess.run(
-            f"python3 -c {shlex.quote(code)}",
-            cwd=root, shell=True, capture_output=True, text=True, check=False,
-        )
-        if proc.returncode != 0:
-            problems.append(f"{name}: not installed for the gate's python3 (pinned {pinned})")
-        elif proc.stdout.strip() != pinned:
-            problems.append(f"{name}: {proc.stdout.strip()}, pinned {pinned}")
+        found = _probe_version(root, name)
+        if found is None:
+            where = "the gate's python3 or PATH" if name in VERSION_PROBES else "the gate's python3"
+            problems.append(f"{name}: not found on {where} (pinned {pinned})")
+        elif found != pinned:
+            problems.append(f"{name}: {found}, pinned {pinned}")
+    return problems
+
+
+def _command_prefix(cmd: str, n: int = 3) -> tuple[str, ...]:
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:  # unbalanced quotes; the raw split is good enough here
+        tokens = cmd.split()
+    return tuple(tokens[:n])
+
+
+def unwinnable_full_gate(root: Path, ticket: dict) -> list[str]:
+    """Refuse a ticket whose full_gate no implementation could ever clear.
+
+    full_gate runs repo-wide at session end, after acceptance has passed. A
+    failure it reports *inside a frozen file* is unclearable by construction:
+    the agent may not edit that file, so the session spends every iteration
+    turning acceptance green and then dies on a lint error nobody is permitted
+    to fix - promoting no evidence, ever. The ticket format already says
+    full_gate must be winnable; this makes that a check rather than advice.
+
+    Two deliberate blind spots, both erring toward silence:
+
+    - A full_gate command sharing its first three tokens with an acceptance
+      command is skipped. Before the implementation exists those are *supposed*
+      to be red, and they fail naming the frozen test - so testing them would
+      call every well-formed ticket unwinnable. This can therefore miss a
+      genuinely unwinnable repo-wide run; it will not invent one.
+    - "Names a frozen path" is a substring test against the command's output
+      tail. A tool that prints paths in another shape, or a run long enough to
+      push the mention past TAIL_CHARS, slips through.
+
+    A check that blocks approval should fail silent, not loud. A false negative
+    costs one wasted session; a false positive blocks work that was fine.
+    """
+    frozen = ticket.get("frozen") or []
+    full = ticket.get("full_gate") or []
+    if not frozen or not full:
+        return []
+
+    skip = {_command_prefix(c) for c in ticket.get("acceptance") or []}
+    to_run = [c for c in full if _command_prefix(c) not in skip]
+    if not to_run:
+        return []
+
+    kills = ticket.get("kill_conditions") or {}
+    results = run_commands(
+        root, to_run, deny_network=(kills.get("network_access") == "deny")
+    )
+    problems = []
+    for c in results:
+        if c.ok:
+            continue
+        named = [rel for rel in frozen if rel in c.output_tail]
+        if named:
+            problems.append(
+                f"{c.command!r} exits {c.exit_code} on frozen file(s) "
+                f"{', '.join(named)}"
+            )
     return problems
 
 
@@ -252,22 +375,38 @@ def cmd_approve(args) -> int:
         if not (root / rel).exists():
             die(f"frozen file does not exist: {rel}")
 
+    commands = ticket.get("acceptance") or []
+    prove_red = bool(commands) and not args.allow_passing
+
+    # Both checks below execute commands, and both misread a broken toolchain:
+    # a missing pytest fails for the wrong reason, which reads as red proof the
+    # ticket has not earned and as a full_gate failure nobody can fix.
+    if prove_red or ticket.get("full_gate"):
+        problems = gate_toolchain_problems(root)
+        if problems:
+            die(
+                "the gate's toolchain does not match requirements-gate.txt: "
+                + "; ".join(problems) + ". A missing tool fails for the wrong reason "
+                "and would read as red. Install the pins: "
+                "pip install -r requirements-gate.txt"
+            )
+
+    unwinnable = unwinnable_full_gate(root, ticket)
+    if unwinnable:
+        die(
+            "full_gate is unwinnable for this ticket: " + "; ".join(unwinnable) + ". "
+            "The agent may not edit a frozen file, so no implementation clears this "
+            "and the session would promote no evidence. Fix the repo or the tool's "
+            "configuration - editing the frozen file invalidates the lock."
+        )
+
+    red = []
     # Everything downstream rests on the frozen tests having teeth. Nothing
     # checked that. A test that asserts nothing passes before the work exists,
     # sails through the gate on the first iteration, and promotes evidence for
     # an implementation nobody wrote - the freeze mechanism faithfully
     # protecting a contract that says nothing.
-    red = []
-    commands = ticket.get("acceptance") or []
-    if commands and not args.allow_passing:
-        problems = gate_toolchain_problems(root)
-        if problems:
-            die(
-                "cannot prove the acceptance commands fail: the gate's toolchain does "
-                "not match requirements-gate.txt: " + "; ".join(problems) + ". A missing "
-                "tool fails for the wrong reason and would read as red. Install the "
-                "pins: pip install -r requirements-gate.txt"
-            )
+    if prove_red:
         kills = ticket.get("kill_conditions") or {}
         red = run_commands(
             root, commands, deny_network=(kills.get("network_access") == "deny")
@@ -283,8 +422,12 @@ def cmd_approve(args) -> int:
     hashes = {rel: sha256(root / rel) for rel in frozen}
     lock = dict(hashes)
     # Reserved key: frozen entries are relative paths and never collide with it.
-    lock["_edad"] = {
+    lock[LOCK_META_KEY] = {
         "approved_at": datetime.now(timezone.utc).isoformat(),
+        # The decisions this ticket discharges, copied from the ticket so the
+        # lock and every record derived from it name them without re-reading
+        # the ticket, which may have been edited since.
+        "decisions": list(ticket.get("decisions") or []),
         "red_proof": [
             {"command": c.command, "exit_code": c.exit_code} for c in red if not c.ok
         ]
@@ -327,6 +470,9 @@ def evaluate(
         commands_ok=False,
     )
 
+    meta = approval_meta(root, ticket["id"])
+    rec.decisions = list(ticket.get("decisions") or meta.get("decisions") or [])
+    rec.red_proof = meta.get("red_proof")
     rec.freeze_ok, freeze_problems = check_freeze(root, ticket)
     rec.violations += freeze_problems
 
@@ -385,6 +531,17 @@ def report(rec: Record) -> None:
         print(f"    [{c.exit_code}] {c.duration_s}s  {c.command}")
     for v in rec.violations:
         print(f"  ! {v}")
+    if rec.decisions:
+        print(f"  decisions {', '.join(rec.decisions)}")
+    if rec.red_proof:
+        print(f"  red proof at approval: {len(rec.red_proof)} command(s) failed")
+    elif rec.commands_ok:
+        # A pass with no red proof is a weaker claim, and saying so is the
+        # difference between "the test passes" and "a test that could fail,
+        # passes". Not a failure - --allow-passing is legitimate - but the
+        # record should not let a reader assume the stronger claim.
+        print("  ! no red proof at approval (--allow-passing): "
+              "this pass does not show the test can fail")
     print(f"  => {mark(rec.passed)}\n")
 
 

@@ -103,10 +103,11 @@ unfinished. Push until you have either:
 Both outcomes are fine. A silent third option, where a requirement sounds testable but
 nobody knows how to test it, is the one to eliminate.
 
-Record the check **verbatim**, as a runnable command line. It becomes a frozen
-acceptance command downstream — hashed, and executed by a verifier that will not run a
-test that has been altered. Approximate phrasing here costs real time later, and a
-command that has to be reconstructed from prose is a command nobody can freeze.
+Record the check **verbatim**, as a runnable command line, and record it under the
+decision's id. It becomes a frozen acceptance command downstream — hashed, executed by
+a verifier that will not run a test that has been altered, and cited by id in the
+evidence record that verifier writes. Approximate phrasing here costs real time later,
+and a command that has to be reconstructed from prose is a command nobody can freeze.
 
 ## What to grill
 
@@ -178,14 +179,25 @@ literally:
 decisions:
   - id: D1
     decision: <what was settled, one line>
-    verify: <exact command line>        # omit and set `unenforced:` if it is a preference
-    unenforced: <why this will not be checked>
+    verify:                             # a LIST, even with one entry — becomes
+      - <exact command line>            # the ticket's `acceptance:`, which is a list
+    unenforced: <why this will not be checked>   # instead of `verify`, for a preference
     scope:                              # paths or globs, as they will be matched
       - <path/or/glob>
     rejected: <option not taken> — <stated reason>
 deferred:
   - <open question — cheap to reverse>
 ```
+
+`verify` is a list because the next stage copies it straight into a ticket's
+`acceptance:`, which the gate runner iterates. A bare string there is a shape mismatch
+someone has to fix by hand, and hand-fixing is where a command gets paraphrased.
+
+**The `id` is the traceability key, so keep it stable.** It is carried into the
+ticket's `decisions:` field and from there into every evidence record, which is what
+lets a record say *which design decision* a passing test discharges. Renumber ids
+between rounds and that chain breaks silently — records will cite decisions that no
+longer exist.
 
 Do not generalize the paths or commands when writing this block. Advice to keep
 tickets free of file paths does not apply to these two fields: a verifier matches the
