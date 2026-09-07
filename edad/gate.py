@@ -14,8 +14,8 @@ exit code and duration, and the tail of each command's output. That record is
 the evidence. The agent's own account of its work is not an input here.
 
 Usage
-    python -m edad.gate approve T001
-    python -m edad.gate run     T001 [--base-ref REF] [--full]
+    python3 -m edad.gate approve T001
+    python3 -m edad.gate run     T001 [--base-ref REF] [--full]
 """
 
 from __future__ import annotations
@@ -260,6 +260,40 @@ def changed_files(root: Path, base_ref: str | None) -> list[str]:
     return sorted(f for f in files if not f.startswith(INFRA_PREFIXES))
 
 
+def match_scope(pattern: str, path: str) -> bool:
+    """Match one scope pattern against one repo-relative path, segment by segment.
+
+    `fnmatch` on the whole string was wrong here, and wrong in the direction
+    that matters: its `*` crosses `/`, so `ytmp3/*` admitted `ytmp3/a/b/c` and a
+    bare `*.py` admitted every Python file in the repo - legacy/, edad/, the
+    gate that is supposed to be judging the diff. `*` alone admitted
+    `.github/workflows/ci.yml`, which is an agent editing the thing that would
+    catch it.
+
+    Nobody writing a ticket means that. `scope` is the containment mechanism, so
+    its patterns match the way the person writing them expects: `*` stays inside
+    one directory, and `**` is the explicit opt-in for crossing.
+
+    fnmatchcase, not fnmatch: fnmatch normalises case through os.path.normcase,
+    which is identity on Linux and macOS and lowercasing on Windows. Git paths
+    are case-sensitive, and the verdict must be a property of the commit rather
+    than of the machine that ran the gate.
+    """
+    return _match_parts(pattern.split("/"), path.split("/"))
+
+
+def _match_parts(pattern: list[str], parts: list[str]) -> bool:
+    if not pattern:
+        return not parts
+    head, rest = pattern[0], pattern[1:]
+    if head == "**":
+        # Zero or more segments, so `**/*.py` covers both `a.py` and `x/y/a.py`.
+        return any(_match_parts(rest, parts[i:]) for i in range(len(parts) + 1))
+    if not parts or not fnmatch.fnmatchcase(parts[0], head):
+        return False
+    return _match_parts(rest, parts[1:])
+
+
 def check_scope(ticket: dict, files: list[str]) -> tuple[bool, list[str]]:
     """Every changed file must match a declared scope glob."""
     allowed = list(ticket.get("scope") or [])
@@ -270,7 +304,7 @@ def check_scope(ticket: dict, files: list[str]) -> tuple[bool, list[str]]:
     strays = [
         f
         for f in files
-        if not any(fnmatch.fnmatch(f, pat) for pat in allowed)
+        if not any(match_scope(pat, f) for pat in allowed)
     ]
     return not strays, [f"out of scope: {f}" for f in strays]
 
