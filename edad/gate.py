@@ -98,12 +98,25 @@ def die(msg: str) -> None:
     print(f"edad: {msg}", file=sys.stderr)
     raise SystemExit(2)
 
+
+def warn(msg: str) -> None:
+    print(f"edad: warning: {msg}", file=sys.stderr)
+
+
 @dataclass
 class CommandResult:
     command: str
     exit_code: int
     duration_s: float
     output_tail: str
+    # Which declared paths this command's output mentioned, matched against the
+    # FULL output before it was truncated into output_tail. Scanning the tail
+    # later is lossy in a way that fails silently: a long run pushes the mention
+    # past TAIL_CHARS and the match just disappears. Computed once by the
+    # verifier and stored, so it is evidence rather than something re-derived
+    # from a lossy artifact - and it lands in the record JSON, which means the
+    # record itself says which frozen files a failure implicated.
+    named_paths: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -262,7 +275,12 @@ def check_scope(ticket: dict, files: list[str]) -> tuple[bool, list[str]]:
     return not strays, [f"out of scope: {f}" for f in strays]
 
 
-def run_commands(root: Path, commands: list[str], deny_network: bool) -> list[CommandResult]:
+def run_commands(
+    root: Path,
+    commands: list[str],
+    deny_network: bool,
+    flag_paths: list[str] | tuple[str, ...] = (),
+) -> list[CommandResult]:
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)  # never let a gate run bill an API account
     if deny_network:
@@ -276,9 +294,13 @@ def run_commands(root: Path, commands: list[str], deny_network: bool) -> list[Co
             cmd, cwd=root, shell=True, capture_output=True, text=True, env=env,
             check=False,
         )
-        out = (proc.stdout + proc.stderr)[-TAIL_CHARS:]
+        out = proc.stdout + proc.stderr
+        named = [rel for rel in flag_paths if rel in out]  # before the truncation
         results.append(
-            CommandResult(cmd, proc.returncode, round(time.monotonic() - t0, 2), out)
+            CommandResult(
+                cmd, proc.returncode, round(time.monotonic() - t0, 2),
+                out[-TAIL_CHARS:], named,
+            )
         )
     return results
 
@@ -373,29 +395,86 @@ def _command_prefix(cmd: str, n: int = 3) -> tuple[str, ...]:
     return tuple(tokens[:n])
 
 
-def unwinnable_full_gate(root: Path, ticket: dict) -> list[str]:
-    """Refuse a ticket whose full_gate no implementation could ever clear.
+def declared_paths(ticket: dict) -> list[str]:
+    """The paths whose mention in command output is worth recording: the frozen
+    files the agent may not touch, and the in-scope files it may. The split
+    between them is what makes a failure diagnosable - see FrozenBlock."""
+    return list(ticket.get("frozen") or []) + list(ticket.get("scope") or [])
 
-    full_gate runs repo-wide at session end, after acceptance has passed. A
-    failure it reports *inside a frozen file* is unclearable by construction:
-    the agent may not edit that file, so the session spends every iteration
-    turning acceptance green and then dies on a lint error nobody is permitted
-    to fix - promoting no evidence, ever. The ticket format already says
-    full_gate must be winnable; this makes that a check rather than advice.
 
-    Two deliberate blind spots, both erring toward silence:
+@dataclass
+class FrozenBlock:
+    """A failing command whose output named at least one frozen file."""
 
-    - A full_gate command sharing its first three tokens with an acceptance
-      command is skipped. Before the implementation exists those are *supposed*
-      to be red, and they fail naming the frozen test - so testing them would
-      call every well-formed ticket unwinnable. This can therefore miss a
-      genuinely unwinnable repo-wide run; it will not invent one.
-    - "Names a frozen path" is a substring test against the command's output
-      tail. A tool that prints paths in another shape, or a run long enough to
-      push the mention past TAIL_CHARS, slips through.
+    command: str
+    exit_code: int
+    frozen: list[str]
+    fixable: list[str]
 
-    A check that blocks approval should fail silent, not loud. A false negative
-    costs one wasted session; a false positive blocks work that was fine.
+    @property
+    def unwinnable(self) -> bool:
+        """True only when nothing the agent was allowed to edit is implicated.
+
+        A failure can name a frozen file *and* a file in scope - a test module
+        that imports both, a linter reporting several files in one run. That is
+        an ordinary failure that happens to mention a frozen path, and the fix
+        is in the agent's hands. Calling it unwinnable would send someone off to
+        rewrite a ticket that was fine.
+        """
+        return not self.fixable
+
+    def describe(self) -> str:
+        s = (f"{self.command!r} exits {self.exit_code} inside frozen "
+             f"{', '.join(self.frozen)}")
+        if self.fixable:
+            s += f" (also names in-scope {', '.join(self.fixable)})"
+        return s
+
+
+def frozen_blocks(results: list[CommandResult], ticket: dict) -> list[FrozenBlock]:
+    """Failures that named a frozen file, classified by whether the agent could
+    have fixed them.
+
+    Pure post-processing over named_paths: it runs nothing. Both callers already
+    hold the results they need - approve from its probe, the session controller
+    from the full_gate record it just wrote - so the classification costs no
+    second gate run.
+    """
+    frozen = set(ticket.get("frozen") or [])
+    scope = set(ticket.get("scope") or [])
+    blocks = []
+    for c in results:
+        if c.ok:
+            continue
+        named_frozen = [rel for rel in c.named_paths if rel in frozen]
+        if not named_frozen:
+            continue
+        blocks.append(
+            FrozenBlock(
+                command=c.command,
+                exit_code=c.exit_code,
+                frozen=named_frozen,
+                fixable=[rel for rel in c.named_paths if rel in scope],
+            )
+        )
+    return blocks
+
+
+def probe_full_gate(root: Path, ticket: dict) -> list[FrozenBlock]:
+    """Run full_gate at approval and report failures landing in a frozen file.
+
+    ADVISORY ONLY. Before the implementation exists, "fails naming the frozen
+    test" is precisely what red looks like, so nothing here can separate a gate
+    no implementation could clear from a ticket that simply has not been built
+    yet. The information to tell those apart does not exist at approve time, so
+    this warns and never refuses. The dispositive check runs at promotion, where
+    acceptance has passed and the same signal means only one thing.
+
+    The three-token prefix skip lives here and only here. Its job is to keep the
+    warning quiet: without it every well-formed ticket warns about its own
+    acceptance command, and a warning that always fires is one nobody reads.
+    Being wrong now costs a missed warning rather than a blocked approve, and
+    the promotion check - which does not skip - covers the blind spot.
     """
     frozen = ticket.get("frozen") or []
     full = ticket.get("full_gate") or []
@@ -409,19 +488,11 @@ def unwinnable_full_gate(root: Path, ticket: dict) -> list[str]:
 
     kills = ticket.get("kill_conditions") or {}
     results = run_commands(
-        root, to_run, deny_network=(kills.get("network_access") == "deny")
+        root, to_run,
+        deny_network=(kills.get("network_access") == "deny"),
+        flag_paths=declared_paths(ticket),
     )
-    problems = []
-    for c in results:
-        if c.ok:
-            continue
-        named = [rel for rel in frozen if rel in c.output_tail]
-        if named:
-            problems.append(
-                f"{c.command!r} exits {c.exit_code} on frozen file(s) "
-                f"{', '.join(named)}"
-            )
-    return problems
+    return frozen_blocks(results, ticket)
 
 
 # --- commands --------------------------------------------------------------
@@ -453,13 +524,17 @@ def cmd_approve(args) -> int:
                 "pip install -r requirements-gate.txt"
             )
 
-    unwinnable = unwinnable_full_gate(root, ticket)
-    if unwinnable:
-        die(
-            "full_gate is unwinnable for this ticket: " + "; ".join(unwinnable) + ". "
-            "The agent may not edit a frozen file, so no implementation clears this "
-            "and the session would promote no evidence. Fix the repo or the tool's "
-            "configuration - editing the frozen file invalidates the lock."
+    # Advisory, not a refusal: at this moment a full_gate failure inside the
+    # frozen test is indistinguishable from the red this ticket is supposed to
+    # be in. Blocking on it refuses well-formed tickets; the session makes the
+    # same call at promotion, where acceptance is green and the answer is real.
+    for block in probe_full_gate(root, ticket):
+        warn(
+            "full_gate may be unwinnable: " + block.describe() + ". The agent may "
+            "not edit a frozen file, so if this failure survives the implementation "
+            "no session can clear it. Not blocking approval - before the work exists "
+            "this looks the same as the expected red. The session re-checks at "
+            "promotion, where the answer is decidable."
         )
 
     red = []
@@ -471,7 +546,9 @@ def cmd_approve(args) -> int:
     if prove_red:
         kills = ticket.get("kill_conditions") or {}
         red = run_commands(
-            root, commands, deny_network=(kills.get("network_access") == "deny")
+            root, commands,
+            deny_network=(kills.get("network_access") == "deny"),
+            flag_paths=declared_paths(ticket),
         )
         if all(c.ok for c in red):
             die(
@@ -572,7 +649,9 @@ def evaluate(
         rec.commands_ok = False
     else:
         rec.commands = run_commands(
-            root, commands, deny_network=(kills.get("network_access") == "deny")
+            root, commands,
+            deny_network=(kills.get("network_access") == "deny"),
+            flag_paths=declared_paths(ticket),
         )
         rec.commands_ok = all(c.ok for c in rec.commands)
         rec.violations += [

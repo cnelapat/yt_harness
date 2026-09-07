@@ -37,6 +37,7 @@ from edad.gate import (
     changed_files,
     check_freeze,
     evaluate,
+    frozen_blocks,
     gate_toolchain_problems,
     git,
     load_ticket,
@@ -57,6 +58,20 @@ MAX_NO_PROGRESS = 2
 
 class Abort(Exception):
     """Stop the session. Carries the reason recorded in the session log."""
+
+
+class Unwinnable(Abort):
+    """The ticket could never have passed: full_gate fails inside a frozen file
+    no permitted edit can reach.
+
+    A subclass so every existing handler still stops the session, but a distinct
+    outcome in the log, because it answers a different question. "aborted" means
+    the agent could not do the work; "unwinnable" means the work was impossible
+    as specified - a defect in Prepare, not a failure in Build. Across a run of
+    sessions that is the count worth having: how often the ticket-writing, not
+    the agent, was the problem.
+    """
+
 
 def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     """Refuse to start rather than fail expensively halfway through."""
@@ -366,6 +381,32 @@ def commit_iteration(wt: Path, ticket_id: str, n: int) -> str:
     return git(wt, "rev-parse", "HEAD")
 
 
+def full_gate_failure(ticket: dict, full: Record) -> Abort:
+    """Which kind of stop a failed full_gate is. Returns the exception; the
+    caller raises it, following check_kills.
+
+    Only callable meaningfully once acceptance is green, which is the whole
+    reason it can decide anything. At approve time a full_gate failure naming
+    the frozen test is indistinguishable from the expected red, so approve only
+    warns. Here the implementation exists and passes its own tests, so a failure
+    landing inside a file the agent may not edit is not unfinished work - it is
+    a gate no permitted edit clears.
+
+    Runs no commands: full.commands already carries named_paths, matched against
+    untruncated output when the verifier ran them.
+    """
+    blocked = [b for b in frozen_blocks(full.commands, ticket) if b.unwinnable]
+    if blocked:
+        return Unwinnable(
+            "full_gate is unwinnable as written: "
+            + "; ".join(b.describe() for b in blocked)
+            + ". Acceptance passed, so this is not unfinished work - the failure "
+            "is inside a frozen file the agent may not edit, and no rerun can "
+            "clear it. Fix the ticket or the tool configuration, then re-approve."
+        )
+    return Abort("acceptance passed but full_gate failed: " + "; ".join(full.violations))
+
+
 def promote_evidence(root: Path, wt: Path, ticket_id: str, rec: Record) -> Path:
     """One record per ticket, committed beside the code it verifies."""
     dest = wt / ".edad" / "evidence" / f"{ticket_id}.json"
@@ -458,7 +499,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
         full = evaluate(wt, ticket, "full_gate", base)
         write_record(root, full)
         if not full.passed:
-            raise Abort("acceptance passed but full_gate failed: " + "; ".join(full.violations))
+            raise full_gate_failure(ticket, full)
 
         dest = promote_evidence(root, wt, ticket["id"], full)
         log.outcome = "passed"
@@ -466,7 +507,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
         print(f"\nPASSED. branch {branch}, evidence committed. Not merged — review and merge.")
 
     except Abort as e:
-        log.outcome = "aborted"
+        log.outcome = "unwinnable" if isinstance(e, Unwinnable) else "aborted"
         log.abort_reason = str(e)
         print(f"\nABORTED: {e}\nBranch {branch} left at {wt} for inspection.", file=sys.stderr)
     finally:
