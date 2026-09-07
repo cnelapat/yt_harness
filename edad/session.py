@@ -11,9 +11,9 @@ Nothing is merged to a mainline branch. A finished session leaves a branch and
 a signed-off record; the merge decision stays with a human.
 
 Usage
-    python -m edad.session run T001                    # local worktree
-    python -m edad.session run T001 --sandbox docker   # network-isolated
-    python -m edad.session run T001 --dry-run          # prompt only, no agent
+    python3 -m edad.session run T001                    # local worktree
+    python3 -m edad.session run T001 --sandbox docker   # network-isolated
+    python3 -m edad.session run T001 --dry-run          # prompt only, no agent
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     # actually means is what these two lines check - a lock exists, and its
     # hashes still match the tree.
     if not (root / ".edad" / "hashes" / f"{ticket['id']}.json").exists():
-        raise Abort("no approval lock; run 'python -m edad.gate approve <ticket>'")
+        raise Abort("no approval lock; run 'python3 -m edad.gate approve <ticket>'")
 
     ok, problems = check_freeze(root, ticket)
     if not ok:
@@ -105,7 +105,23 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
     blocked = ticket.get("blocked_by") or []
     unmet = [b for b in blocked if not (root / ".edad" / "evidence" / f"{b}.json").exists()]
     if unmet:
-        raise Abort(f"blocked by tickets with no evidence: {', '.join(unmet)}")
+        # The refusal is right and must stay: this worktree branches from the
+        # current HEAD, so an unmerged blocker's CODE is not in it either, and
+        # the ticket genuinely cannot proceed. Only the wording was wrong.
+        # "no evidence" reads as "that ticket has not been done", which sends
+        # the reader off to re-run a session that already passed. What is
+        # actually missing is the merge.
+        branches = ", ".join(f"edad/{b.lower()}" for b in unmet)
+        raise Abort(
+            f"no evidence record here for: {', '.join(unmet)}. That does not mean "
+            f"they failed. A passing session commits its evidence on the ticket's "
+            f"OWN branch ({branches}) and merges nothing, so the record only "
+            f"becomes visible at {root / '.edad' / 'evidence'} once you merge. "
+            f"Check whether those branches passed and need merging; if no session "
+            f"has run them, run those first. Do not copy the record across by "
+            f"hand - merging is also what puts the blocker's code into this "
+            f"worktree, which is what this ticket is actually waiting for."
+        )
 
     # changed_files() filters .edad/ — the harness's own logs and worktrees
     # must not count as user changes, or a session can never run twice.
