@@ -165,44 +165,73 @@ seem thorough. Stop when the questions stop changing the plan.
 
 ## Output
 
-On confirmation, hand off two things.
+On confirmation, **write the record to `.edad/grills/<slug>.md`** and tell the user
+the path. Do not leave it in the conversation only: a spec written next week has to
+cite where its decisions came from, and a grill that exists only in a transcript is a
+provenance link that dead-ends. Pick a kebab-case slug from what was designed.
+
+Create `.edad/grills/` if it is not there; nothing else does — the harness only creates
+the directories it writes to itself, and this is not one of them. If `.edad/` itself
+does not exist, this repo is not set up for EDAD — say so and write the record to the
+working directory instead rather than creating the tree.
+
+The file has two halves, and they do not overlap.
 
 **A prose record**, in the order the decisions were made: each decision, its
-verification command verbatim, the file scope it touches, the options rejected and
-why, and the open questions you agreed to defer.
+verification commands verbatim, the file scope it touches, the options rejected and
+why, and the open questions you agreed to defer. This half is for a human returning
+to the design cold.
 
 **A structured block**, so the next stage transcribes nothing. Downstream consumes
 `scope` as path globs and `verify` as shell commands, both matched and executed
 literally:
 
+````markdown
+---
+slug: <kebab-case>
+grilled_at: <ISO date>
+---
+
+## Record
+
+<the prose half>
+
+## Decisions
+
 ```yaml
 decisions:
   - id: D1
     decision: <what was settled, one line>
-    verify:                             # a LIST, even with one entry — becomes
-      - <exact command line>            # the ticket's `acceptance:`, which is a list
-    unenforced: <why this will not be checked>   # instead of `verify`, for a preference
+    verify:                             # list; omit and set `unenforced:` if a preference
+      - <exact command line>
+    unenforced: <why this will not be checked>
+    frozen:                             # test file(s) the verify commands run; may not exist yet
+      - <path>
     scope:                              # paths or globs, as they will be matched
       - <path/or/glob>
     rejected: <option not taken> — <stated reason>
 deferred:
   - <open question — cheap to reverse>
 ```
+````
 
-`verify` is a list because the next stage copies it straight into a ticket's
-`acceptance:`, which the gate runner iterates. A bare string there is a shape mismatch
-someone has to fix by hand, and hand-fixing is where a command gets paraphrased.
+Exactly one of `verify` or `unenforced` per decision. Both present, or neither, is the
+one disallowed state.
 
-**The `id` is the traceability key, so keep it stable.** It is carried into the
-ticket's `decisions:` field and from there into every evidence record, which is what
-lets a record say *which design decision* a passing test discharges. Renumber ids
-between rounds and that chain breaks silently — records will cite decisions that no
-longer exist.
+**The `id` is the traceability key, so keep it stable.** It is carried through the spec
+into the ticket's `decisions:` field, and from there into the approval lock and every
+evidence record — which is what lets a record say *which design decision* a passing
+test discharges. Renumber ids between rounds and that chain breaks silently: records
+will cite decisions that no longer exist.
 
 Do not generalize the paths or commands when writing this block. Advice to keep
-tickets free of file paths does not apply to these two fields: a verifier matches the
-diff against `scope` and runs `verify` as written, so a path replaced by a description
-or a command replaced by a summary produces a ticket that cannot be gated.
+tickets free of file paths does not apply to these fields: a verifier matches the diff
+against `scope`, runs `verify` as written, and hashes the files named in `frozen`. A
+path replaced by a description, or a command replaced by a summary, produces a ticket
+that cannot be gated.
 
 Do not editorialize the record. It is the input to the spec, and anything you smooth
 over here becomes an assumption nobody notices.
+
+Then state the path, the decision count (enforced and unenforced separately), and
+stop. `to-spec` is a separate, deliberate step.

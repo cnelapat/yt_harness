@@ -1,11 +1,11 @@
 ---
 name: to-tickets
-description: Turn a grill record or spec into EDAD tickets - YAML-frontmatter files under .edad/tickets/ that the gate runner can load, freeze, scope and execute. Use when breaking a plan into tickets for the EDAD harness, or after /grill-me.
+description: Turn a spec (or, failing that, a grill record) into EDAD tickets - YAML-frontmatter files under .edad/tickets/ that the gate runner can load, freeze, scope and execute. Use when breaking a plan into tickets for the EDAD harness, or after /to-spec.
 ---
 
 # To tickets (EDAD)
 
-Turn a grill record or spec into **tickets the gate runner can execute**. A ticket here
+Turn a spec into **tickets the gate runner can execute**. A ticket here
 is not a note for a human. It is an input to `edad/gate.py`, which loads its
 frontmatter, hashes the files it freezes, matches the diff against its scope, and runs
 its commands. A ticket the gate cannot load is not a ticket.
@@ -19,13 +19,29 @@ body.
 
 ## Process
 
-**1. Read the source.** Work from the grill record, the spec, or the conversation. If
-the user passes a path or issue reference, read it in full. A grill record's structured
-block already carries `id`, `verify`, `scope` and `rejected` per decision: `verify`
-(a list) becomes `acceptance` (a list), `scope` becomes `scope`, the files named in
-`verify` become `frozen`, and the `id`s of every decision this ticket discharges become
-`decisions`. Carry them across verbatim. Do not paraphrase a command, and do not
-renumber a decision id — the id is what a later evidence record cites.
+**1. Read the source.** Prefer the spec at `.edad/specs/<slug>.md` when one exists —
+`to-spec` has already confirmed its paths against the repo and chosen the seams. Fall
+back to the grill record at `.edad/grills/<slug>.md` only when there is no spec, and to
+the conversation only when there is neither. Either way, read it in full.
+
+The spec's `## Decisions` block is the structured block `grill-me` emitted plus the
+`seam:` field `to-spec` adds. Map it field by field: `verify` (a list) becomes `acceptance` (a
+list), `scope` becomes `scope`, `frozen` becomes `frozen`, and the `id`s of every
+decision this ticket discharges become `decisions`. Put the spec's path in `spec:`.
+Carry all of it across verbatim. Do not paraphrase a command, and do not renumber a
+decision id — the id is what a later evidence record cites.
+
+**Take `frozen` as written; never parse a path out of a command.** `grill-me` records
+the test file explicitly and `to-spec` confirms it against the repo for exactly this
+reason — reading a path back out of a verify command happens to work for a pytest node
+id and fails for everything else, and it fails silently, producing a ticket that freezes
+the wrong file or no file at all.
+
+**Read the spec's `## Seams` section too.** Each decision's `seam:` names where its
+acceptance test attaches, which is what step 4 needs before it can write one. A seam
+marked **new** does not exist in the code yet: whatever file creates it belongs in some
+ticket's `scope`, and when that is a different ticket from the one whose test observes
+it, that dependency is a `blocked_by` edge.
 
 A decision whose grill entry has `unenforced:` instead of `verify:` has no acceptance
 command by construction. It belongs in the ticket body as context, never in
@@ -40,6 +56,15 @@ acceptance commands, small enough that an agent can finish it inside
 `max_iterations`. Prefer a ticket that makes one behaviour work end to end over one
 that builds a layer. Declare ordering with `blocked_by`: the session controller
 refuses to start a ticket whose blockers have no evidence recorded.
+
+**A `blocked_by` edge is cleared by a merge, not by a passing session.** Evidence is
+promoted onto the blocker's own branch and nothing is merged automatically, so after
+`T001` passes, `.edad/evidence/T001.json` exists on `edad/t001` and not at the repo
+root — and `T002` still refuses to start. That is correct rather than a nuisance: the
+next worktree branches from the current `HEAD`, so an unmerged blocker's *code* is
+absent too, and `T002` would be building against a seam that is not there. Every
+`blocked_by` edge you draw is therefore a human review-and-merge step someone has to
+take between the two sessions. Draw them only where the dependency is real.
 
 **4. Write the acceptance test first, and make sure it fails.** The test file is
 authored before the implementation and listed under `frozen`. `edad.gate approve` runs
@@ -80,7 +105,8 @@ decisions:                    # grill-record ids this ticket's gate discharges;
   - D1                        # copied into the approval lock and every evidence
   - D3                        # record, so a green record names what it proves
 
-scope:                        # agent may create/modify ONLY these; globs, matched literally
+scope:                        # agent may create/modify ONLY these; `*` stays inside one
+                              # directory, `**` crosses; matched case-sensitively
   - path/to/file.py
 
 frozen:                       # hashed at approval; agent may read, never write
@@ -93,7 +119,8 @@ full_gate:                    # runs once at session end, before evidence is pro
   - python3 -m pytest -q
   - ruff check .
 
-blocked_by: []                # ticket ids; each needs .edad/evidence/<ID>.json to exist
+blocked_by: []                # ticket ids; each needs .edad/evidence/<ID>.json at the
+                              # repo root, i.e. its branch merged, not merely passed
 
 kill_conditions:
   max_iterations: 6
@@ -129,9 +156,15 @@ diff touches nothing outside `scope`.
 
 ## Rules the gate enforces, so write for them
 
-- **`scope` is an allow-list, matched with `fnmatch` against paths relative to the repo
-  root.** Every file the agent must create belongs here, including `__init__.py`.
+- **`scope` is an allow-list, matched segment by segment against paths relative to the
+  repo root.** Every file the agent must create belongs here, including `__init__.py`.
   Frozen files are allowed implicitly. Anything else in the diff fails the ticket.
+
+  `*` matches inside one directory and does not cross `/`: `ytmp3/*.py` admits
+  `ytmp3/converter.py` and refuses `ytmp3/sub/deep.py`. `**` is the explicit opt-in for
+  crossing, matching zero or more segments, so `ytmp3/**/*.py` reaches the whole
+  subtree. Matching is case-sensitive. Prefer exact paths anyway: a ticket that names
+  its files is one whose blast radius you can read off the frontmatter.
 - **`acceptance` and `full_gate` run through a shell, verbatim.** Use `python3 -m
   pytest`, not `pytest`: the bare name resolves through PATH and can be a different
   interpreter than the one the pins were installed into.
