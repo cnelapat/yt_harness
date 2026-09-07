@@ -149,6 +149,13 @@ test already asserts these, and the agent cannot change either side.
 
 What belongs to other tickets, named by id.
 
+## Widened scope
+
+Required only when `scope` contains a path that already exists and that this ticket
+does not otherwise need to modify. Name each such path and say what put it there.
+Omit the whole section when every scope entry is a file the ticket creates or must
+change on its own merits.
+
 ## Done when
 
 Every command under `acceptance` exits 0, the frozen file hash is unchanged, and the
@@ -166,6 +173,19 @@ diff touches nothing outside `scope`.
   crossing, matching zero or more segments, so `ytmp3/**/*.py` reaches the whole
   subtree. Matching is case-sensitive. Prefer exact paths anyway: a ticket that names
   its files is one whose blast radius you can read off the frontmatter.
+- **Scope widened for a reason other than the work must say so in the body, under
+  `## Widened scope`.** The gate does not enforce this and cannot: `scope` is a single
+  allow-list, so a path added because the agent must edit it and a path added because a
+  mutation must perturb it are indistinguishable to the matcher. That is exactly why it
+  needs writing down.
+
+  The case that produces it is a characterization ticket pinning module A's behaviour
+  while refactoring module B. The mutation's diff must land inside `scope`, so A goes in
+  `scope`, and A is now writable by the agent for the whole session. That is a real
+  weakening of containment, and it arrives through a ticket shape rather than through a
+  config knob — nothing prompts a reviewer to notice it, and the scope list alone reads
+  as ordinary. Name the path and the reason, so approving the ticket is approving the
+  widening rather than overlooking it.
 - **`acceptance` and `full_gate` run through a shell, verbatim.** Use `python3 -m
   pytest`, not `pytest`: the bare name resolves through PATH and can be a different
   interpreter than the one the pins were installed into.
