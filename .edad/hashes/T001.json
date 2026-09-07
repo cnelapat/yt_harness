@@ -1,7 +1,7 @@
 {
   "tests/test_acceptance_converter.py": "8ede006354f6cff85eae1bf33c38949bafb4c6ef94301463a6dc019b62001a72",
   "_edad": {
-    "approved_at": "2026-09-07T01:48:08.102170+00:00",
+    "approved_at": "2026-09-07T23:57:23.283727+00:00",
     "ticket_sha256": "56082bb547a9e642a58dc87b1d6cd8dff9550ca40baa3fb0e681201559672e3a",
     "decisions": [],
     "red_proof": [
@@ -9,6 +9,22 @@
         "command": "python3 -m pytest tests/test_acceptance_converter.py -q",
         "exit_code": 2
       }
-    ]
+    ],
+    "full_gate_baseline": {
+      "taken_at": "2026-09-07T23:57:23.071521+00:00",
+      "commit": "25098d6127f39f03afe6e488ade7b754fe8030e3",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 2,
+          "keys": {
+            "pytest:tests/test_acceptance_converter.py": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
   }
 }
