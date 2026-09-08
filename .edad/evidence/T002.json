@@ -1,0 +1,48 @@
+{
+  "ticket": "T002",
+  "started_at": "2026-09-08T00:24:39.811081+00:00",
+  "commit": "1b8d26fbcd908947539e543271b4b5ecfffdec46",
+  "base_ref": "76b2f8396c7b9da1a2ac9763f95987873ad30f66",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/session.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 2.39,
+      "output_tail": "........................................................................ [ 90%]\n........                                                                 [100%]\n80 passed in 2.15s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_session_network.py -q",
+      "exit_code": 2
+    }
+  ],
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true
+}
