@@ -30,6 +30,8 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -178,6 +180,12 @@ class Record:
     # before the work began, and it passes now.
     decisions: list[str] = field(default_factory=list)
     red_proof: list[dict] | None = None
+    # The other proof a ticket can carry, and a separate field rather than a
+    # differently-shaped red_proof: no red was ever taken here, so filling that
+    # one in would make the record assert something the gate never measured. The
+    # two are never both set, and report() prints three tiers because there are
+    # three.
+    mutation_proof: dict | None = None
     # Whether an approval lock with an _edad block was found at all. Without it
     # a missing red_proof cannot be read as "approved with --allow-passing" -
     # see report(), which used to assert that flag either way.
@@ -488,6 +496,14 @@ def run_commands(
 # commit and the ratchet never holds. File plus rule code is the coarsest key
 # that still distinguishes findings, and that coarseness is the accepted cost.
 PYTEST_FAILURE_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
+# FAILED alone, and a SECOND pattern rather than a narrowing of the one above.
+# The keys that one produces are persisted - every approval lock stores a
+# full_gate_baseline of them, and existing locks hold ERROR-shaped keys - so
+# folding the outcome into the key shape would make every stored baseline
+# uncomparable and turn pre-existing failures into new ones repo-wide. The
+# ratchet wants a coarse identity; the mutation proof wants the distinction the
+# ratchet discards. They are different questions, so they get different regexes.
+PYTEST_FAILED_RE = re.compile(r"^FAILED (\S+)", re.MULTILINE)
 RUFF_FAILURE_RE = re.compile(r"^(\S+?):\d+:\d+: ([A-Z]+[0-9]+)\b", re.MULTILINE)
 # ruff's DEFAULT output is the "full" diagnostic, which puts the rule on one
 # line and the location on the next behind an arrow. The concise pattern above
@@ -834,6 +850,322 @@ def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[Comm
     return red
 
 
+# --- the mutation proof ------------------------------------------------------
+#
+# What makes a characterization ticket approvable. Such a test pins behaviour
+# that already exists, so it passes on day one - passing is what makes it
+# correct - and prove_red_or_die's bar cannot be met without lying. Weakening
+# the bar is not available either: green at base plus green at HEAD plus a diff
+# inside scope is satisfied by a test that asserts nothing.
+#
+# The separator is that a vacuous test never runs, so the worst it can produce
+# is a pytest ERROR; only a test with an assertion in it can produce FAILED. So
+# the ticket declares perturbations of the code it characterizes, and approval
+# requires the frozen node ids it named to come back FAILED against each one -
+# green where it pins, dead where it declared. Stronger than a red proof.
+
+
+@dataclass
+class Mutation:
+    """One declared perturbation, and the frozen node ids it must trip.
+
+    `expects` has no default: without it the entry only asks that something went
+    red, and a mutation to the codec caught by the test asserting the output path
+    would count - proving that test can fail for an unrelated reason.
+    """
+
+    command: str
+    expects: list[str]
+
+
+def mutation_entries(ticket: dict, allow_passing: bool = False) -> list[Mutation]:
+    """The ticket's declared mutations. Pure: it runs nothing.
+
+    Empty for an ordinary ticket, and that emptiness is the whole mode switch -
+    a ticket that declares no mutations keeps the red proof it has always had.
+    """
+    raw = ticket.get("mutation") or []
+    if not raw:
+        return []
+    if allow_passing:
+        die(
+            "--allow-passing was given for a ticket that declares mutations. That "
+            "flag re-approves a ticket already implemented; here it would skip the "
+            "one proof the block exists to take. Drop one or the other."
+        )
+    entries = []
+    for i, item in enumerate(raw):
+        command = item.get("command") if isinstance(item, dict) else None
+        expects = item.get("expects") if isinstance(item, dict) else None
+        if not isinstance(command, str) or not command.strip():
+            die(f"mutation entry {i} needs a non-empty 'command' and 'expects': {item!r}")
+        if not isinstance(expects, list) or not expects or not all(
+            isinstance(e, str) and e.strip() for e in expects
+        ):
+            die(
+                f"mutation entry {i} needs a non-empty 'expects' listing the frozen "
+                f"node ids this mutation must trip: {item!r}. Without it the entry "
+                f"only asks that something went red."
+            )
+        entries.append(Mutation(command=command, expects=list(expects)))
+    return entries
+
+
+def detected_node_ids(output: str, frozen: list[str]) -> list[str]:
+    """Node ids one command's output reported FAILED inside a frozen file.
+
+    Pure - it runs nothing, the shape frozen_blocks established, so the rules
+    about what counts cost tests rather than mutation runs.
+
+    ERROR is never detection, and that is the case the whole design rests on: a
+    test that asserts nothing never runs, so the worst it can do is error, and an
+    import break turns the whole suite red while proving nothing about any
+    assertion in it. A FAILED outside the frozen files is not detection either;
+    nothing else is under contract.
+
+    Reads the output tail, where pytest's short summary lives. A run long enough
+    to push a FAILED past TAIL_CHARS drops it from the detected set and refuses
+    an approval that should have passed - the safe direction, and the only one
+    available while CommandResult keeps the tail alone.
+    """
+    files = set(frozen)
+    return sorted(
+        {
+            node
+            for node in PYTEST_FAILED_RE.findall(output)
+            if node.split("::", 1)[0] in files
+        }
+    )
+
+
+def unfired_expectations(expects: list[str], detected: list[str]) -> list[str]:
+    """Declared node ids that nothing in `detected` matches, in declared order.
+
+    A detected id matches on equality, or when it is the expected id followed by
+    '[' - so a base id is satisfied by its parametrised cases, while
+    `<expected>_and_something_else` is a different test and not a match.
+
+    Every entry must fire. Listing several plausible catchers and being right
+    about one would leave unverified claims in the lock beside verified ones.
+    """
+    return [e for e in expects if not any(d == e or d.startswith(f"{e}[") for d in detected)]
+
+
+def remove_worktree(root: Path, path: Path) -> None:
+    """Delete a mutation worktree, forcibly. Raises CalledProcessError if git
+    refuses.
+
+    --force because a bare `git worktree remove` fails on a dirty tree, which is
+    the state every mutation leaves: the cleanup would fail in exactly the case
+    it exists for. A module-level name so the failure path can be tested without
+    breaking git, the reason docker_network_internal is one.
+    """
+    subprocess.run(
+        ["git", "-C", str(root), "worktree", "remove", "--force", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+
+
+@contextmanager
+def mutation_worktree(root: Path):
+    """A throwaway detached checkout of HEAD, removed on the way out.
+
+    The mutation is destructive by design, so it never runs in the tree the user
+    is working in. An orphaned worktree at HEAD with a mutation applied is a trap
+    - discovered by an error message here, or by something confusing later - so a
+    removal git refused refuses the approval.
+    """
+    path = root / ".edad" / "worktrees" / f"mutation-{uuid.uuid4().hex[:12]}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    git(root, "worktree", "add", "--detach", str(path), "HEAD")
+    try:
+        yield path
+    finally:
+        try:
+            remove_worktree(root, path)
+        except subprocess.CalledProcessError as e:
+            die(
+                f"could not remove the mutation worktree at {path}: git exited "
+                f"{e.returncode}. It is a detached checkout of HEAD with a mutation "
+                f"applied, so it must not be left behind."
+            )
+
+
+def mutation_touched_paths(worktree: Path) -> list[str]:
+    """Repo-relative paths the mutation changed inside its worktree."""
+    return [p for p in git(worktree, "diff", "--name-only").splitlines() if p]
+
+
+def _git_answer(root: Path, *args: str) -> str | None:
+    """git's stdout for `root`, or None when git could not answer at all.
+
+    Tolerant where git_raw is strict, for the two questions the mutation proof
+    asks before it has established anything about `root`: is a frozen path dirty,
+    and what is HEAD. None means there is no repository here - which approve
+    cannot reach, having resolved `root` from git in the first place.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def dirty_frozen_paths(root: Path, frozen: list[str]) -> list[str]:
+    """Frozen paths that are untracked or modified in `root`."""
+    if not frozen:
+        return []
+    out = _git_answer(root, "status", "--porcelain", "-uall", "--", *frozen)
+    if out is None:
+        return []
+    return sorted(
+        {line[3:].strip().split(" -> ")[-1] for line in out.splitlines() if len(line) > 3}
+    )
+
+
+def _supplies_detection(command: str) -> bool:
+    """Whether this command could report a pytest FAILED at a node id.
+
+    An exit-code fallback for everything else was rejected: a linter goes red
+    under a mutation whether or not any test asserts anything, so counting that
+    as detection reopens the vacuity hole for exactly the commands it covered. A
+    non-pytest command still runs and must be green; its exit code is never proof.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    return any(t == "pytest" or t.endswith("/pytest") for t in tokens)
+
+
+def prove_mutation_or_die(root: Path, ticket: dict, commands: list[str]) -> dict:
+    """Require every declared mutation to be caught by the node ids it named.
+
+    The sibling of prove_red_or_die, for the ticket type that cannot produce a
+    red: green at base first - a characterization test failing against the code
+    it claims to characterize is simply wrong - then dead in the declared places
+    under every mutation. Returns the evidence; refuses approval otherwise.
+    """
+    frozen = list(ticket.get("frozen") or [])
+    dirty = dirty_frozen_paths(root, frozen)
+    if dirty:
+        die(
+            "frozen file(s) are uncommitted: " + ", ".join(dirty) + ". The mutation "
+            "is measured against committed bytes while the lock hashes what is on "
+            "disk - a proof about text the contract does not cover. Commit them."
+        )
+
+    kills = ticket.get("kill_conditions") or {}
+    deny_network = kills.get("network_access") == "deny"
+    flag_paths = declared_paths(ticket)
+    timeout_s = command_timeout(ticket)
+
+    base = run_commands(
+        root, commands,
+        deny_network=deny_network, flag_paths=flag_paths, timeout_s=timeout_s,
+    )
+    not_green = [c for c in base if not c.ok]
+    if not_green:
+        die(
+            "a mutation proof requires the acceptance commands to pass against the "
+            "code they characterize, and these did not: "
+            + "; ".join(f"[{c.exit_code}] {c.command!r}" for c in not_green)
+            + ". A test that fails against the behaviour it claims to pin is wrong."
+        )
+
+    if not any(_supplies_detection(c) for c in commands):
+        die(
+            "no acceptance command can supply detection: "
+            + "; ".join(repr(c) for c in commands)
+            + ". Detection is a pytest FAILED at a declared node id - ERROR is not, "
+            "and neither is a non-zero exit from anything else: both are produced "
+            "just as readily by a test that asserts nothing."
+        )
+
+    proof = {
+        "commit": (_git_answer(root, "rev-parse", "HEAD") or "").strip(),
+        "green_at_base": [{"command": c.command, "exit_code": c.exit_code} for c in base],
+        "mutations": [],
+    }
+    scope = list(ticket.get("scope") or [])
+
+    for entry in mutation_entries(ticket):
+        with mutation_worktree(root) as wt:
+            applied = run_commands(
+                wt, [entry.command],
+                deny_network=deny_network, flag_paths=flag_paths, timeout_s=timeout_s,
+            )[0]
+            # Before any acceptance command runs here. A mutation that did not
+            # apply leaves the worktree at HEAD, where the acceptance commands
+            # pass - which would read as "undetected" and blame the test for the
+            # mutation's own failure to run.
+            if applied.timed_out or not applied.ok:
+                die(
+                    f"the mutation command did not apply: {entry.command!r} "
+                    + (
+                        f"was killed after {applied.duration_s}s"
+                        if applied.timed_out
+                        else f"exited {applied.exit_code}"
+                    )
+                    + ". Nothing was perturbed, so there is nothing to detect."
+                )
+
+            touched = mutation_touched_paths(wt)
+            strays = [
+                p for p in touched if not any(match_scope(pat, p) for pat in scope)
+            ]
+            if strays:
+                die(
+                    f"the mutation {entry.command!r} changed files outside the "
+                    f"ticket's scope: " + ", ".join(strays) + ". `scope` names the "
+                    "code the characterization pins, so a mutation reaching past it "
+                    "measures something the ticket never claimed."
+                )
+
+            results = run_commands(
+                wt, commands,
+                deny_network=deny_network, flag_paths=flag_paths, timeout_s=timeout_s,
+            )
+            detected: set[str] = set()
+            acceptance_command = None
+            for c in results:
+                found = detected_node_ids(c.output_tail, frozen)
+                if found and acceptance_command is None:
+                    acceptance_command = c.command
+                detected.update(found)
+
+            if not detected:
+                die(
+                    f"the mutation {entry.command!r} survived: no frozen test "
+                    f"reported FAILED against it. These ran and missed it: "
+                    + "; ".join(repr(c.command) for c in results)
+                    + ". An approved blind spot is a licensed regression."
+                )
+
+            unfired = unfired_expectations(entry.expects, sorted(detected))
+            if unfired:
+                die(
+                    f"the mutation {entry.command!r} did not trip the node id(s) it "
+                    f"declared: " + ", ".join(unfired) + ". Detected instead: "
+                    + ", ".join(sorted(detected))
+                    + ". A mutation caught by some other test proves that test can "
+                    "fail for an unrelated reason, not that the declared one has teeth."
+                )
+
+            proof["mutations"].append(
+                {
+                    "command": entry.command,
+                    "touched": touched,
+                    "expects": list(entry.expects),
+                    "acceptance_command": acceptance_command,
+                    "detected_by": sorted(detected),
+                }
+            )
+    return proof
+
+
 def refuse_silent_widening(root: Path, ticket_id: str, baseline: dict) -> None:
     prior = approval_meta(root, ticket_id).get("full_gate_baseline") or {}
     grown = baseline_growth(prior, baseline)
@@ -846,6 +1178,22 @@ def refuse_silent_widening(root: Path, ticket_id: str, baseline: dict) -> None:
             "catch. Fix them, or re-run with --rebaseline to record the wider "
             "baseline deliberately."
         )
+
+
+def print_approval_proof(red: list[CommandResult], mutation_proof: dict | None) -> None:
+    """What this approval rests on. Exactly one of the three is true."""
+    if mutation_proof:
+        muts = mutation_proof.get("mutations") or []
+        print(f"  mutation proof ({len(muts)} mutation(s), each caught where declared):")
+        for m in muts:
+            print(f"    {m['command']}")
+            print(f"      -> {', '.join(m['detected_by'])}  ({m['acceptance_command']})")
+    elif red:
+        print("  red proof (these failed before the work existed):")
+        for c in red:
+            print(f"    [{c.exit_code}] {c.command}")
+    else:
+        print("  ! no red proof recorded (--allow-passing)")
 
 
 def print_baseline(baseline: dict) -> None:
@@ -875,12 +1223,18 @@ def cmd_approve(args) -> int:
             die(f"frozen file does not exist: {rel}")
 
     commands = ticket.get("acceptance") or []
-    prove_red = bool(commands) and not args.allow_passing
+    # Reads the ticket and validates it; this is also what refuses
+    # --allow-passing alongside a mutation block, before anything has run.
+    mutations = mutation_entries(ticket, args.allow_passing)
+    # A declared mutation block selects the proof. The two are alternatives, not
+    # a fallback: a characterization test is green at base by construction, so
+    # asking it for a red first would refuse every correct one.
+    prove_red = bool(commands) and not mutations and not args.allow_passing
 
     # Both checks below execute commands, and both misread a broken toolchain:
     # a missing pytest fails for the wrong reason, which reads as red proof the
     # ticket has not earned and as a full_gate failure nobody can fix.
-    if prove_red or ticket.get("full_gate"):
+    if prove_red or mutations or ticket.get("full_gate"):
         problems = gate_toolchain_problems(root)
         if problems:
             die(
@@ -908,6 +1262,7 @@ def cmd_approve(args) -> int:
             "promotion, where the answer is decidable."
         )
 
+    mutation_proof = prove_mutation_or_die(root, ticket, commands) if mutations else None
     red = prove_red_or_die(root, ticket, commands) if prove_red else []
 
     hashes = {rel: sha256(root / rel) for rel in frozen}
@@ -928,6 +1283,10 @@ def cmd_approve(args) -> int:
             {"command": c.command, "exit_code": c.exit_code} for c in red if not c.ok
         ]
         or None,
+        # Records the node ids, not merely that the gate was satisfied: a
+        # {command, exit_code} shape mirroring red_proof would lose the
+        # FAILED/ERROR distinction the whole design rests on.
+        "mutation_proof": mutation_proof,
         # What was already failing before the work began. The session subtracts
         # this at promotion so a pre-existing failure is attributed to the repo
         # rather than to the agent.
@@ -939,12 +1298,7 @@ def cmd_approve(args) -> int:
     print(f"approved {ticket['id']}: {len(hashes)} frozen file(s)")
     for rel, h in hashes.items():
         print(f"  {h[:12]}  {rel}")
-    if red:
-        print("  red proof (these failed before the work existed):")
-        for c in red:
-            print(f"    [{c.exit_code}] {c.command}")
-    else:
-        print("  ! no red proof recorded (--allow-passing)")
+    print_approval_proof(red, mutation_proof)
     if baseline:
         print_baseline(baseline)
     return 0
@@ -991,6 +1345,7 @@ def evaluate(
         # of the lock's guarantees.
         rec.decisions = list(ticket.get("decisions") or [])
     rec.red_proof = meta.get("red_proof")
+    rec.mutation_proof = meta.get("mutation_proof")
 
     rec.freeze_ok, freeze_problems = check_freeze(root, ticket)
     rec.violations += freeze_problems
@@ -1126,7 +1481,29 @@ def report(rec: Record) -> None:
     if rec.approved and not rec.ticket_verified:
         print("  ! approval lock predates ticket hashing: the frozen tests were "
               "verified, the ticket's own fields were not")
-    if rec.red_proof:
+    report_proof(rec)
+    print(f"  => {verdict_line(rec)}\n")
+
+
+def report_proof(rec: Record) -> None:
+    """What the approval this record cites actually established.
+
+    Three tiers, because there are three claims. A mutation proof is not the
+    --allow-passing case and must never print as one.
+    """
+    if rec.mutation_proof:
+        # The counts are disclosure: four mutations all caught by one assertion
+        # must not read identically to four caught by four. Nothing requires the
+        # declared mutations to span the behaviour the test claims to pin, and
+        # nothing here can check that - so a narrow proof passes but cannot look
+        # wide.
+        muts = rec.mutation_proof.get("mutations") or []
+        distinct = {n for m in muts for n in (m.get("detected_by") or [])}
+        print(
+            f"  mutation proof at approval: {len(muts)} mutation(s) caught by "
+            f"{len(distinct)} distinct node id(s)"
+        )
+    elif rec.red_proof:
         print(f"  red proof at approval: {len(rec.red_proof)} command(s) failed")
     elif rec.commands_ok and rec.approved:
         # A pass with no red proof is a weaker claim, and saying so is the
@@ -1141,7 +1518,6 @@ def report(rec: Record) -> None:
         # nobody passed.
         print("  ! no approval metadata for this ticket: this pass cites no red "
               "proof, and none was recorded. Run approve to establish one.")
-    print(f"  => {verdict_line(rec)}\n")
 
 
 def main() -> int:
