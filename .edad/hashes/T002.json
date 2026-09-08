@@ -1,0 +1,30 @@
+{
+  "tests/test_session_network.py": "8510e10ab83d140aea77dcb23c3632814ca4bc61052e965a047615ad58cfc1cd",
+  "_edad": {
+    "approved_at": "2026-09-08T00:13:47.802782+00:00",
+    "ticket_sha256": "b3affca6ab8a1534709d78bed532b7effd766f691fa086f39ced0b719899cb49",
+    "decisions": [],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_network.py -q",
+        "exit_code": 2
+      }
+    ],
+    "full_gate_baseline": {
+      "taken_at": "2026-09-08T00:13:47.474755+00:00",
+      "commit": "3c5f9af5580b570a9ce5da47be2f4e057b6d9b80",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 2,
+          "keys": {
+            "pytest:tests/test_session_network.py": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
