@@ -203,11 +203,22 @@ class Record:
         """Every failing command failed only in ways the baseline already had.
 
         This is what makes a pre-existing failure attributable to the repo
-        rather than to the agent. False when nothing failed, and false when any
-        failure could not be compared - both are cases where this answer would
-        be an assumption rather than a measurement.
+        rather than to the agent. False when nothing failed, false when any
+        failure could not be compared, and false when any failure was never
+        compared at all - each is a case where this answer would be an
+        assumption rather than a measurement.
         """
         if self.commands_ok or self.uncomparable_failures:
+            return False
+        # The third unmeasured case, and the one this property used to answer
+        # as though it had measured it. apply_ratchet runs on full_gate alone,
+        # so on any other gate every failure goes unjudged - and the empty
+        # new_failures that leaves behind is byte-identical to the one a clean
+        # comparison leaves. An acceptance run with 25 red commands and no
+        # baseline consulted therefore reported "nothing failing is new".
+        # A failure the ratchet never looked at is a cannot-tell, exactly like
+        # uncomparable_failures above; silence is not absolution.
+        if any(c.command not in self.new_failures for c in self.commands if not c.ok):
             return False
         return not any(self.new_failures.values())
 

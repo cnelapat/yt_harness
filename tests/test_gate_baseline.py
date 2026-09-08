@@ -200,6 +200,32 @@ def test_a_passing_full_gate_is_not_pre_existing_only():
     assert record([cmd(exit_code=0, keys={})]).pre_existing_only is False
 
 
+def test_a_failure_the_ratchet_never_judged_is_not_pre_existing_only():
+    """The gate this property was never told about. apply_ratchet runs on
+    full_gate alone, so an acceptance run leaves new_failures empty - and empty
+    because nothing was compared reads exactly like empty because the
+    comparison came back clean. This answered "nothing failing is new" for a
+    run of 25 red acceptance commands against a baseline it never opened."""
+    rec = record([cmd(exit_code=4, keys={})])
+    rec.gate = "acceptance"
+    assert rec.new_failures == {}, "the ratchet did not run on this gate"
+    assert rec.baseline_commit is None, "there was nothing to compare against"
+    assert rec.pre_existing_only is False, "never-compared is not pre-existing"
+    assert rec.passed_modulo_baseline is False, "and it must not promote"
+    assert verdict_line(rec) == "FAIL"
+
+
+def test_one_judged_command_does_not_vouch_for_its_neighbour():
+    """The check is per failing command, not a single flag for the run. A
+    ratchet that reached one command and not the other has still not measured
+    the second, and the verdict covers both."""
+    judged = cmd(command="python3 -m pytest -q", keys={"pytest:x::y": 1})
+    unjudged = cmd(command="ruff check .", keys={"ruff:legacy/other.py:F401": 1})
+    rec = record([judged, unjudged])
+    rec.new_failures = {judged.command: []}
+    assert rec.pre_existing_only is False
+
+
 # --- re-baselining is deliberate -------------------------------------------
 
 
