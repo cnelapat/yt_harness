@@ -1,0 +1,139 @@
+{
+  "tests/test_gate_mutation.py": "b4650f4d34583c66e618cad5b6bc7d21c2ea1f6c950c1a5a6be0cf5507511b62",
+  "_edad": {
+    "approved_at": "2026-09-08T21:33:41.330737+00:00",
+    "ticket_sha256": "5dec5640fe629bc8fb57f4b4f68ab38610cef9b2ad060aa9719516aab38296c1",
+    "decisions": [
+      "D1",
+      "D2",
+      "D3",
+      "D4",
+      "D5",
+      "D6",
+      "D7",
+      "D8",
+      "D9",
+      "D10",
+      "D11",
+      "D12"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_declared_mutation_command_is_the_one_run -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_mutation_entry_without_expects_is_rejected -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_mutation_block_requires_green_at_base -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_red_at_base_refuses_a_characterization_ticket -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_mutation_runs_in_a_throwaway_worktree -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_dirty_frozen_path_refuses_approval -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_dirty_worktree_is_force_removed -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_failed_removal_refuses_approval_and_names_the_path -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_mutation_outside_scope_refuses_approval -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_failed_in_a_frozen_file_is_detection -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_error_is_not_detection -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_failed_outside_the_frozen_files_is_not_detection -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_parametrised_node_id_matches_its_base_id -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_unfired_expected_id_refuses_and_names_it -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_partial_intersection_is_not_enough -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_undetected_mutation_refuses_and_names_the_survivor -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_non_pytest_command_cannot_supply_detection -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_timed_out_mutation_refuses -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_failing_mutation_command_refuses -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_lock_records_expects_and_detected_by -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_red_proof_stays_null_for_a_characterization_ticket -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_record_carries_mutation_proof -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_report_names_the_mutation_proof_tier -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_report_prints_mutation_and_distinct_detector_counts -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_allow_passing_with_mutation_is_an_error -q",
+        "exit_code": 4
+      }
+    ],
+    "full_gate_baseline": {
+      "taken_at": "2026-09-08T21:33:36.940385+00:00",
+      "commit": "6e4718ac7119bcf2028b7f9ccfa413c0cea160a3",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 2,
+          "keys": {
+            "pytest:tests/test_gate_mutation.py": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
