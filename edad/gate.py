@@ -226,6 +226,25 @@ class Record:
         scope_clears = self.scope_ok or not self.scope_enforced
         return self.freeze_ok and scope_clears and self.commands_ok
 
+    @property
+    def passed_modulo_baseline(self) -> bool:
+        """Green against the baseline rather than green outright.
+
+        Deliberately a second, weaker property instead of widening `passed`:
+        commands DID fail, and a record must never answer "was the suite green"
+        with yes when it was not. This answers the different question the
+        ratchet exists to ask - did this ticket make anything worse - and says
+        so in its name.
+
+        It is what makes the ratchet worth having. A brownfield repo carries red
+        nobody is going to clear, so requiring `passed` there means no ticket
+        ever promotes evidence and the baseline only improves an error message.
+        Freeze and scope still have to be clean: those are this ticket's own
+        conduct, and no baseline forgives them.
+        """
+        scope_clears = self.scope_ok or not self.scope_enforced
+        return self.freeze_ok and scope_clears and self.pre_existing_only
+
 
 # --- checks ----------------------------------------------------------------
 
@@ -1045,6 +1064,22 @@ def write_record(root: Path, rec: Record) -> Path:
     return path
 
 
+def verdict_line(rec: Record) -> str:
+    """The last line of a report.
+
+    Three outcomes, not two. A run that failed only in ways the baseline already
+    had is not a FAIL - nothing here is the ticket's doing - but it is not a
+    plain PASS either, because the suite was not green. Saying "PASS" flat would
+    let a reader conclude something the gate did not measure; the qualifier is
+    the whole point, and the baseline lines printed above it say against what.
+    """
+    if rec.passed:
+        return "PASS"
+    if rec.passed_modulo_baseline:
+        return "PASS (modulo the approved baseline - nothing failing is new)"
+    return "FAIL"
+
+
 def report(rec: Record) -> None:
     def mark(ok: bool) -> str:
         return "PASS" if ok else "FAIL"
@@ -1095,7 +1130,7 @@ def report(rec: Record) -> None:
         # nobody passed.
         print("  ! no approval metadata for this ticket: this pass cites no red "
               "proof, and none was recorded. Run approve to establish one.")
-    print(f"  => {mark(rec.passed)}\n")
+    print(f"  => {verdict_line(rec)}\n")
 
 
 def main() -> int:

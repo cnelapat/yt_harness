@@ -523,6 +523,11 @@ def commit_iteration(wt: Path, ticket_id: str, n: int) -> str:
     return git(wt, "rev-parse", "HEAD")
 
 
+# The outcomes that promoted evidence. Both are successes; they differ in what
+# the evidence claims, which is recorded in the record rather than inferred here.
+PROMOTED_OUTCOMES = frozenset({"passed", "passed_modulo_baseline"})
+
+
 def full_gate_failure(ticket: dict, full: Record) -> Abort:
     """Which kind of stop a failed full_gate is. Returns the exception; the
     caller raises it, following check_kills.
@@ -547,24 +552,15 @@ def full_gate_failure(ticket: dict, full: Record) -> Abort:
             "clear it. Fix the ticket or the tool configuration, then re-approve."
         )
 
-    # The frozen-file case above is one way a gate can be unwinnable, and it was
-    # the only one this could see. The commoner one on an existing codebase is
-    # duller: a failure somewhere the ticket never mentions, which names no
-    # frozen path, produces no FrozenBlock, and used to fall through to the
-    # generic abort below - reported as the agent's failure. With a baseline it
-    # is simply identifiable as not the agent's, and this is not a second
-    # classifier so much as the baseline finally arriving.
-    if full.pre_existing_only:
-        return Unwinnable(
-            "full_gate fails only in ways that were already failing before this "
-            "ticket began, at baseline commit "
-            + (full.baseline_commit or "unknown")[:8]
-            + ": " + ", ".join(sorted(full.new_failures))
-            + ". Acceptance passed and the agent introduced no new failure, so no "
-            "rerun clears this. Fix the pre-existing failures, or re-approve with "
-            "--rebaseline to accept them as the new baseline."
-        )
-
+    # There is deliberately no branch here for "everything that failed was
+    # already failing". That case does not reach this function any more: it
+    # promotes, on Record.passed_modulo_baseline. It used to return Unwinnable
+    # telling the operator to fix the pre-existing failures or re-approve with
+    # --rebaseline, and the second half of that advice could not work - the
+    # failures are inside the baseline by definition, so widening it leaves them
+    # pre-existing and returns here again. More importantly the first half asks
+    # a brownfield repo to go green before any ticket may promote, which is the
+    # condition the baseline was built to survive rather than to report.
     if full.uncomparable_failures:
         # Say so rather than implying the ratchet was applied and cleared.
         return Abort(
@@ -588,11 +584,15 @@ def promote_evidence(root: Path, wt: Path, ticket_id: str, rec: Record) -> Path:
     dest = wt / ".edad" / "evidence" / f"{ticket_id}.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(rec)
+    # Both verdicts, always. A reader must be able to tell a green gate from one
+    # that was merely no worse than its baseline without re-deriving either.
     payload["passed"] = rec.passed
+    payload["passed_modulo_baseline"] = rec.passed_modulo_baseline
     dest.write_text(json.dumps(payload, indent=2) + "\n")
     subprocess.run(["git", "add", "-f", str(dest)], cwd=wt, check=True)
+    how = "full gate passed" if rec.passed else "full gate green modulo baseline"
     subprocess.run(
-        ["git", "commit", "-q", "-m", f"{ticket_id}: evidence (full gate passed)"],
+        ["git", "commit", "-q", "-m", f"{ticket_id}: evidence ({how})"],
         cwd=wt, check=True,
     )
     return dest
@@ -674,13 +674,17 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
 
         full = evaluate(wt, ticket, "full_gate", base)
         write_record(root, full)
-        if not full.passed:
+        if not (full.passed or full.passed_modulo_baseline):
             raise full_gate_failure(ticket, full)
 
         dest = promote_evidence(root, wt, ticket["id"], full)
-        log.outcome = "passed"
+        log.outcome = "passed" if full.passed else "passed_modulo_baseline"
         log.evidence = str(dest.relative_to(wt))
-        print(f"\nPASSED. branch {branch}, evidence committed. Not merged — review and merge.")
+        how = "PASSED" if full.passed else (
+            "PASSED modulo the approved baseline (the suite is not green; "
+            "nothing failing is new)"
+        )
+        print(f"\n{how}. branch {branch}, evidence committed. Not merged — review and merge.")
 
     except Abort as e:
         log.outcome = "unwinnable" if isinstance(e, Unwinnable) else "aborted"
@@ -692,7 +696,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
         stamp = log.started_at.replace(":", "").replace("-", "")[:15]
         (d / f"{log.ticket}-{stamp}.json").write_text(json.dumps(asdict(log), indent=2) + "\n")
 
-    return 0 if log.outcome == "passed" else 1
+    return 0 if log.outcome in PROMOTED_OUTCOMES else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

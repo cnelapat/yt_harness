@@ -15,6 +15,7 @@ from edad.gate import (
     baseline_growth,
     extract_failure_keys,
     new_failure_keys,
+    verdict_line,
 )
 
 PYTEST_OUT = """\
@@ -225,3 +226,73 @@ def test_losing_the_ability_to_ratchet_counts_as_widening():
 
 def test_a_command_new_to_the_ticket_has_nothing_to_widen():
     assert baseline_growth(baseline_of(), baseline_of(**{"ruff check .": {"a": 1}})) == []
+
+
+# --- promoting against the baseline -----------------------------------------
+#
+# The ratchet's point is not a better error message. On a codebase carrying red
+# nobody will clear, requiring a green gate means no ticket ever promotes
+# evidence, so "no worse than the baseline" has to be a promotable result.
+
+
+def pre_existing_record():
+    """Acceptance green, full_gate red, nothing new: the brownfield steady state."""
+    failing = cmd(exit_code=1, keys={"pytest:tests/test_legacy.py::test_old": 1})
+    rec = record([failing])
+    rec.baseline_commit = "a" * 40
+    rec.new_failures = {failing.command: []}
+    return rec
+
+
+def test_a_run_that_added_nothing_is_promotable_but_not_a_pass():
+    rec = pre_existing_record()
+    assert rec.passed is False, "the suite was not green and must not say it was"
+    assert rec.passed_modulo_baseline is True
+
+
+def test_a_failure_the_ticket_introduced_is_not_promotable():
+    rec = pre_existing_record()
+    rec.new_failures = {rec.commands[0].command: ["pytest:tests/test_new.py::test_x"]}
+    assert rec.passed_modulo_baseline is False
+
+
+def test_a_failure_that_could_not_be_compared_is_not_promotable():
+    """'Cannot tell' must never promote. It is the answer that would let a real
+    regression through wearing the baseline's result."""
+    rec = pre_existing_record()
+    rec.uncomparable_failures = ["ruff check ."]
+    assert rec.passed_modulo_baseline is False
+
+
+def test_the_baseline_does_not_forgive_a_scope_violation():
+    """Freeze and scope are this ticket's own conduct. No baseline recorded
+    before the work began can say anything about them."""
+    rec = pre_existing_record()
+    rec.scope_violations = ["ytmp3/elsewhere.py"]
+    assert rec.passed_modulo_baseline is False
+
+
+def test_the_baseline_does_not_forgive_a_frozen_hash_mismatch():
+    rec = pre_existing_record()
+    rec.freeze_ok = False
+    assert rec.passed_modulo_baseline is False
+
+
+def test_a_green_gate_is_a_pass_and_not_a_modulo_result():
+    """The two are mutually exclusive by construction: pre_existing_only is
+    false when nothing failed, so a green run never wears the weaker label."""
+    rec = record([cmd(exit_code=0)])
+    assert rec.passed is True
+    assert rec.passed_modulo_baseline is False
+
+
+def test_the_verdict_line_distinguishes_all_three_outcomes():
+    assert verdict_line(record([cmd(exit_code=0)])) == "PASS"
+
+    modulo = verdict_line(pre_existing_record())
+    assert modulo.startswith("PASS")
+    assert "baseline" in modulo, "a bare PASS would overstate what was measured"
+
+    introduced = pre_existing_record()
+    introduced.new_failures = {introduced.commands[0].command: ["pytest:x::y"]}
+    assert verdict_line(introduced) == "FAIL"
