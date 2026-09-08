@@ -13,6 +13,9 @@ a signed-off record; the merge decision stays with a human.
 Usage
     python3 -m edad.session run T001                    # local worktree
     python3 -m edad.session run T001 --sandbox docker   # network-isolated
+    python3 -m edad.session run T001 --sandbox docker --network edad-fixtures
+                                                       # ... plus that network,
+                                                       # if docker calls it internal
     python3 -m edad.session run T001 --dry-run          # prompt only, no agent
 """
 
@@ -73,7 +76,8 @@ class Unwinnable(Abort):
     """
 
 
-def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
+def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool,
+              network: str | None = None) -> None:
     """Refuse to start rather than fail expensively halfway through."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         raise Abort(
@@ -139,6 +143,70 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool) -> None:
         if sandbox == "docker" and not shutil.which("docker"):
             raise Abort("--sandbox docker requested but docker is not on PATH")
 
+    # Last, so the plainer refusals above (no docker at all) speak first: this
+    # one's message is about a network, and "cannot report on it" is a poor way
+    # to say docker is not installed.
+    validate_network(sandbox, network)
+
+
+def docker_network_internal(name: str) -> str | None:
+    """Docker's own answer to whether `name` is an internal network: the
+    stripped `{{.Internal}}` output, or None when docker did not answer.
+
+    Every way of not answering collapses to None on purpose - no such network,
+    daemon not running, docker not installed. The caller does not act on the
+    distinction: what it needs to know is whether the isolation was measured,
+    and an unmeasured network is refused whatever the reason.
+
+    The only thing in this tier that shells out, and a module-level name so the
+    refusal logic can be tested against each answer without a daemon.
+    """
+    try:
+        proc = subprocess.run(
+            ["docker", "network", "inspect", name, "--format", "{{.Internal}}"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def validate_network(sandbox: str, network: str | None) -> None:
+    """Refuse a --network the harness cannot back with docker's own answer.
+
+    The default tier asserts nothing, so it asks nothing: probing on every run
+    would let an unrelated docker problem refuse sessions that never needed
+    docker. Once a name is given the prompt is going to tell the agent it has
+    no internet egress, and network_rule's rule applies - the claim is only
+    allowed because this measured it. An 'isolated' network with a gateway
+    answers "false" and is refused here rather than lied about later.
+    """
+    if network is None:
+        return
+    if sandbox != "docker":
+        raise Abort(
+            f"--network {network} needs --sandbox docker: the network attaches a "
+            "container, and an unsandboxed run has no container to attach."
+        )
+    internal = docker_network_internal(network)
+    if internal is None:
+        raise Abort(
+            f"docker could not report on network {network!r} (no such network, no "
+            "daemon, or no docker). Its isolation was not measured, so it will not "
+            "be promised to the agent. Create it with: "
+            f"docker network create --internal {network}"
+        )
+    if internal != "true":
+        raise Abort(
+            f"network {network!r} exists but is not internal (docker reports "
+            f"Internal={internal!r}), so it reaches the internet. Attaching to it "
+            "would put a 'no network access' claim in every prompt that nothing "
+            "enforces. Re-create it with: "
+            f"docker network create --internal {network}"
+        )
+
 
 def agent_has_credential() -> bool | None:
     """Whether the CLI has *a* credential: an exported token or a keychain login.
@@ -195,7 +263,7 @@ def make_worktree(root: Path, ticket_id: str, base: str) -> tuple[Path, str]:
 # --- prompting -------------------------------------------------------------
 
 
-def network_rule(sandbox: str, cont_indent: str = "") -> str:
+def network_rule(sandbox: str, cont_indent: str = "", network: str | None = None) -> str:
     """The network sentence, matched to the run it is in.
 
     Under --sandbox none the agent does have the network, and asserting
@@ -203,8 +271,22 @@ def network_rule(sandbox: str, cont_indent: str = "") -> str:
     mechanically checked. Shared by both prompts: the retry prompt restates the
     constraints, so a hardcoded "no network" there reintroduces on iteration 2
     exactly the lie the initial prompt is careful not to tell on iteration 1.
+
+    The named tier is the same rule applied a third time. The container is on a
+    network, so "--network none" would be false; it still cannot leave that
+    network, because validate_network refused to start unless docker called it
+    internal. Both halves are said, because an agent told only "no internet"
+    will not think to reach the service it was given.
     """
-    if sandbox == "docker":
+    if sandbox == "docker" and network is not None:
+        lines = [
+            f"You are attached to the docker network {network}: services on it are",
+            "reachable by container name (for example a database at its container",
+            "name, on its own port). You have no internet egress - the network is",
+            "internal, and this was confirmed with docker before the run started.",
+            "Do not attempt installs or downloads.",
+        ]
+    elif sandbox == "docker":
         lines = [
             "You have no network access: the container runs with --network none.",
             "Do not attempt installs or downloads.",
@@ -219,11 +301,11 @@ def network_rule(sandbox: str, cont_indent: str = "") -> str:
     return ("\n" + cont_indent).join(lines)
 
 
-def initial_prompt(ticket: dict, sandbox: str = "none") -> str:
+def initial_prompt(ticket: dict, sandbox: str = "none", network: str | None = None) -> str:
     scope = "\n".join(f"  - {s}" for s in ticket.get("scope") or [])
     frozen = "\n".join(f"  - {s}" for s in ticket.get("frozen") or [])
     accept = "\n".join(f"  {c}" for c in ticket.get("acceptance") or [])
-    network = f"4. {network_rule(sandbox, cont_indent='   ')}"
+    network_item = f"4. {network_rule(sandbox, cont_indent='   ', network=network)}"
     return f"""You are implementing ticket {ticket['id']}: {ticket.get('title', '')}
 
 {ticket.get('_body', '')}
@@ -244,14 +326,15 @@ them ends the session immediately and discards the work.
    the same commands decide the verdict:
 {accept}
 
-{network}
+{network_item}
 
 Work directly in the repository. Do not create a summary, a report, or a
 completion file; nothing you write about your work is read.
 """
 
 
-def retry_prompt(ticket: dict, rec: Record, iteration: int, sandbox: str = "none") -> str:
+def retry_prompt(ticket: dict, rec: Record, iteration: int, sandbox: str = "none",
+                 network: str | None = None) -> str:
     # A killed command is described as killed. Presenting a timeout as "exit
     # 124" alongside real failures sends the agent to debug an assertion that
     # never ran; what it needs to know is that something did not terminate.
@@ -274,20 +357,29 @@ This is the verifier's own output, not a summary:
 Fix the implementation. The same constraints apply: only the files in scope,
 and the frozen tests stay untouched.
 
-{network_rule(sandbox)}
+{network_rule(sandbox, network=network)}
 """
 
 
 # --- agent invocation ------------------------------------------------------
 
 
-def agent_argv(prompt: str, workdir: Path, sandbox: str, image: str, yolo: bool) -> list[str]:
+def agent_argv(  # noqa: PLR0913  # a pure argv builder: six independent inputs, not six jobs
+    prompt: str, workdir: Path, sandbox: str, image: str, yolo: bool,
+    network: str | None = None,
+) -> list[str]:
     """Build the agent command.
 
     Flags differ across Claude Code releases — verify with `claude --help` and
     override with EDAD_AGENT_CMD if yours differs. The invocation is pinned
     explicitly rather than relying on defaults, because `-p` defaults are
     documented as changing in future releases.
+
+    `network` names a docker network to attach instead of the default isolation;
+    validate_network has already confirmed with docker that it is internal. It
+    is keyword-defaulted last so every existing positional call is unchanged,
+    and exactly one --network is emitted either way: docker accepts the flag
+    twice and silently keeps one, so a second would not be a stricter run.
     """
     override = os.environ.get("EDAD_AGENT_CMD")
     base = shlex.split(override) if override else ["claude", "-p"]
@@ -298,7 +390,9 @@ def agent_argv(prompt: str, workdir: Path, sandbox: str, image: str, yolo: bool)
         return inner
     return [
         "docker", "run", "--rm",
-        "--network", "none",                     # the deny in kill_conditions, made real
+        # No name: the deny in kill_conditions, made real. A name: a network
+        # docker itself called internal, which is the same deny one tier wider.
+        "--network", network if network is not None else "none",
         "-v", f"{workdir}:/work",
         "-w", "/work",
         "-e", "CLAUDE_CODE_OAUTH_TOKEN",
@@ -507,7 +601,7 @@ def promote_evidence(root: Path, wt: Path, ticket_id: str, rec: Record) -> Path:
 def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the flow
     root = repo_root()
     ticket = load_ticket(root, args.ticket)
-    preflight(root, ticket, args.sandbox, args.dry_run)
+    preflight(root, ticket, args.sandbox, args.dry_run, args.network)
 
     base = git(root, "rev-parse", "HEAD")
     wt, branch = make_worktree(root, ticket["id"], base)
@@ -519,7 +613,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
         sandbox=args.sandbox,
     )
 
-    prompt = initial_prompt(ticket, args.sandbox)
+    prompt = initial_prompt(ticket, args.sandbox, args.network)
     if args.dry_run:
         print(prompt)
         print(f"\n[dry-run] worktree {wt} on {branch}; no agent invoked")
@@ -534,7 +628,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
     try:
         for n in range(1, max_iter + 1):
             print(f"\n--- iteration {n}/{max_iter} ---")
-            argv = agent_argv(prompt, wt, args.sandbox, args.image, args.yolo)
+            argv = agent_argv(prompt, wt, args.sandbox, args.image, args.yolo, args.network)
             t0 = time.monotonic()
             exit_code, out = run_agent(argv, wt)
             print(f"agent exited {exit_code} in {round(time.monotonic() - t0)}s")
@@ -574,7 +668,7 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
                 raise Abort(reason)
             if rec.passed:
                 break
-            prompt = retry_prompt(ticket, rec, n, args.sandbox)
+            prompt = retry_prompt(ticket, rec, n, args.sandbox, args.network)
         else:
             raise Abort(f"exhausted {max_iter} iterations without passing the gate")
 
@@ -601,18 +695,28 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
     return 0 if log.outcome == "passed" else 1
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, built apart from main() so the wiring is testable without
+    spawning a process - a flag that reaches no code is a flag that silently
+    does nothing."""
     p = argparse.ArgumentParser(prog="edad.session")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run one ticket unattended")
     r.add_argument("ticket")
     r.add_argument("--sandbox", choices=["none", "docker"], default="none")
     r.add_argument("--image", default=DEFAULT_IMAGE)
+    r.add_argument("--network", metavar="NAME", default=None,
+                   help="attach the agent container to this docker network instead of "
+                        "--network none; refused unless docker reports it internal")
     r.add_argument("--yolo", action="store_true",
                    help="skip permission prompts; only meaningful with --sandbox docker")
     r.add_argument("--dry-run", action="store_true", help="print the prompt and exit")
     r.set_defaults(func=cmd_run)
-    args = p.parse_args()
+    return p
+
+
+def main() -> int:
+    args = build_parser().parse_args()
     try:
         return args.func(args)
     except Abort as e:
