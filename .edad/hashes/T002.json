@@ -1,8 +1,8 @@
 {
   "tests/test_session_network.py": "8510e10ab83d140aea77dcb23c3632814ca4bc61052e965a047615ad58cfc1cd",
   "_edad": {
-    "approved_at": "2026-09-08T00:13:47.802782+00:00",
-    "ticket_sha256": "b3affca6ab8a1534709d78bed532b7effd766f691fa086f39ced0b719899cb49",
+    "approved_at": "2026-09-08T00:21:34.152001+00:00",
+    "ticket_sha256": "ff423bec9b5b3cef11745fa3873591de384e00f512abe381d58a975c08611004",
     "decisions": [],
     "red_proof": [
       {
@@ -11,8 +11,8 @@
       }
     ],
     "full_gate_baseline": {
-      "taken_at": "2026-09-08T00:13:47.474755+00:00",
-      "commit": "3c5f9af5580b570a9ce5da47be2f4e057b6d9b80",
+      "taken_at": "2026-09-08T00:21:33.794863+00:00",
+      "commit": "d963a0b4c446e7827a383143db1e4b76a1b82d2d",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 2,
