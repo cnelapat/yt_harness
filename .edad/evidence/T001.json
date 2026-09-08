@@ -1,0 +1,49 @@
+{
+  "ticket": "T001",
+  "started_at": "2026-09-08T00:00:35.511108+00:00",
+  "commit": "beb8cfdb4b49b0d50aaa73fb9f011f25b7cb8c4c",
+  "base_ref": "bc56e95914442df2d207616bdbd661a74613cc35",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "ytmp3/__init__.py",
+    "ytmp3/converter.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 2.4,
+      "output_tail": "...............................................................          [100%]\n63 passed in 2.12s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.06,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_acceptance_converter.py -q",
+      "exit_code": 2
+    }
+  ],
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true
+}
