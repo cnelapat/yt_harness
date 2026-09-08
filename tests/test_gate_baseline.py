@@ -31,6 +31,28 @@ legacy/other.py:1:1: F401 `os` imported but unused
 Found 3 errors.
 """
 
+# Ruff's DEFAULT output, captured verbatim from the pinned ruff 0.15.18. The
+# concise fixture above is what this file used to test exclusively, which is
+# how `ruff check .` came to be unratchetable without any test noticing: the
+# fixture described a format the pinned tool does not emit.
+RUFF_FULL_OUT = """\
+PLR0913 Too many arguments in function definition (6 > 5)
+   --> edad/session.py:362:5
+    |
+362 | def agent_argv(prompt: str, workdir: Path, sandbox: str, image: str, yolo: bool,
+    |     ^^^^^^^^^^
+363 |                network: str | None = None) -> list[str]:
+    |
+
+E501 Line too long (120 > 100)
+   --> legacy/other.py:9:101
+    |
+  9 | x = 1
+    |
+
+Found 2 errors.
+"""
+
 
 def cmd(command="python3 -m pytest -q", exit_code=1, keys=None, timed_out=False):
     return CommandResult(command, exit_code, 1.0, "", [], timed_out, keys)
@@ -65,6 +87,23 @@ def test_lint_failures_drop_line_and_column():
         "lint:legacy/mp3converter.py:E501": 1,
         "lint:legacy/other.py:F401": 1,
     }
+
+
+def test_lint_failures_in_ruffs_default_output_are_identified():
+    """The format `ruff check .` actually prints. Parsing only the concise
+    shape left every real lint failure unidentifiable, so the ratchet fell
+    through to "cannot compare" and the session reported a baseline problem
+    instead of the rule that broke."""
+    assert extract_failure_keys(RUFF_FULL_OUT) == {
+        "lint:edad/session.py:PLR0913": 1,
+        "lint:legacy/other.py:E501": 1,
+    }
+
+
+def test_a_lint_failure_is_never_silently_uncomparable():
+    """The consequence the parser exists to prevent: an unidentifiable failure
+    cannot be ratcheted at all, so it is neither pre-existing nor introduced."""
+    assert extract_failure_keys(RUFF_FULL_OUT) is not None
 
 
 def test_the_same_finding_moving_down_the_file_is_the_same_key():

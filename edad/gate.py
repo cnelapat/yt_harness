@@ -459,6 +459,17 @@ def run_commands(
 # that still distinguishes findings, and that coarseness is the accepted cost.
 PYTEST_FAILURE_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
 RUFF_FAILURE_RE = re.compile(r"^(\S+?):\d+:\d+: ([A-Z]+[0-9]+)\b", re.MULTILINE)
+# ruff's DEFAULT output is the "full" diagnostic, which puts the rule on one
+# line and the location on the next behind an arrow. The concise pattern above
+# matches none of it, so before this existed every ruff failure came back
+# unidentifiable and `ruff check .` could never be ratcheted - the baseline
+# recorded a lint failure it could not name, and a session that tripped one
+# aborted saying the baseline could not be applied rather than naming the rule.
+# Both shapes are parsed because a ticket may declare --output-format=concise,
+# and the gate runs whatever the ticket declares.
+RUFF_FULL_FAILURE_RE = re.compile(
+    r"^([A-Z]+[0-9]+)\b.*\n\s*-->\s+(\S+?):\d+:\d+", re.MULTILINE
+)
 
 
 def extract_failure_keys(output: str) -> dict[str, int] | None:
@@ -479,6 +490,9 @@ def extract_failure_keys(output: str) -> dict[str, int] | None:
     for node in PYTEST_FAILURE_RE.findall(output):
         keys[f"pytest:{node}"] = keys.get(f"pytest:{node}", 0) + 1
     for path, rule in RUFF_FAILURE_RE.findall(output):
+        k = f"lint:{path}:{rule}"
+        keys[k] = keys.get(k, 0) + 1
+    for rule, path in RUFF_FULL_FAILURE_RE.findall(output):
         k = f"lint:{path}:{rule}"
         keys[k] = keys.get(k, 0) + 1
     return keys or None
