@@ -1,0 +1,122 @@
+{
+  "ticket": "T006",
+  "started_at": "2026-09-09T23:12:05.821838+00:00",
+  "commit": "39e440c9d692c6b0e390c759aaa59fb93a12651d",
+  "base_ref": "bddcae3787d09668198a51b0833ce697f3fdaf13",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    ".gitignore",
+    "edad/session_queue.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 9.62,
+      "output_tail": "........................................................................ [ 43%]\n........................................................................ [ 87%]\n....................                                                     [100%]\n164 passed in 9.45s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D7",
+    "D8",
+    "D9",
+    "D10"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_failed_ticket_skips_its_transitive_dependents -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_failed_ticket_skips_its_transitive_dependents"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_independent_tickets_continue_after_a_failure -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_independent_tickets_continue_after_a_failure"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_skip_reason_names_the_failed_ticket -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_skip_reason_names_the_failed_ticket"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_two_consecutive_no_commit_aborts_stop_the_queue -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_two_consecutive_no_commit_aborts_stop_the_queue"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_wall_clock_budget_stops_the_queue -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_wall_clock_budget_stops_the_queue"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_breaker_firing_is_recorded_distinctly_from_a_ticket_failure -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_breaker_firing_is_recorded_distinctly_from_a_ticket_failure"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_run_log_records_outcome_and_merge_sha_per_ticket -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_run_log_records_outcome_and_merge_sha_per_ticket"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_run_log_is_gitignored_telemetry -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_run_log_is_gitignored_telemetry"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_final_full_gate_runs_on_the_run_branch_tip -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_final_full_gate_runs_on_the_run_branch_tip"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_final_gate_result_is_in_the_run_log -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_final_gate_result_is_in_the_run_log"
+      ]
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
