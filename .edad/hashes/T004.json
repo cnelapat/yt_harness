@@ -1,0 +1,77 @@
+{
+  "tests/test_session_queue.py": "d8ae8567c78e3c9c9ed8625925938f61dee1e17ae1d35e744d375df28126d4d2",
+  "_edad": {
+    "approved_at": "2026-09-09T14:48:18.497835+00:00",
+    "ticket_sha256": "cd2f0c92c6d40c500870b0714c41401b7e4c485a18e5902163e954c9237490eb",
+    "decisions": [
+      "D2",
+      "D3",
+      "D4",
+      "D5",
+      "D11"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_run_branch_is_cut_from_main_and_checked_out -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_main_is_never_moved_by_a_run -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_promoted_branch_merges_fast_forward_only -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_non_fast_forward_stops_the_run -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_each_ticket_runs_in_its_own_subprocess -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_session_exit_code_is_the_outcome_signal -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_ticket_is_reapproved_against_the_run_branch -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_changed_frozen_hash_refuses_rather_than_reapproves -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_changed_ticket_bytes_refuses_rather_than_reapproves -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_run_ends_with_root_on_the_run_branch -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_names_every_per_ticket_branch -q",
+        "exit_code": 4
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-09T14:48:16.707207+00:00",
+      "commit": "1a48d511e7c50dfe1398b0e033b191f9a238e97e",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 2,
+          "keys": {
+            "pytest:tests/test_session_queue.py": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
