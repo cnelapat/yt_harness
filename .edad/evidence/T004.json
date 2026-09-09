@@ -1,0 +1,112 @@
+{
+  "ticket": "T004",
+  "started_at": "2026-09-09T15:47:33.086965+00:00",
+  "commit": "3819a2b21124636929913940556530a60b406415",
+  "base_ref": "ee5c9b079b2898d5be7140ca76ffd92bbd890df3",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/session_queue.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 5.97,
+      "output_tail": "........................................................................ [ 54%]\n.............................................................            [100%]\n133 passed in 5.81s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.05,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D2",
+    "D3",
+    "D4",
+    "D5",
+    "D11"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_run_branch_is_cut_from_main_and_checked_out -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_main_is_never_moved_by_a_run -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_promoted_branch_merges_fast_forward_only -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_non_fast_forward_stops_the_run -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_each_ticket_runs_in_its_own_subprocess -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_session_exit_code_is_the_outcome_signal -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_ticket_is_reapproved_against_the_run_branch -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_changed_frozen_hash_refuses_rather_than_reapproves -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_changed_ticket_bytes_refuses_rather_than_reapproves -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_run_ends_with_root_on_the_run_branch -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_names_every_per_ticket_branch -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_merge_failure_reports_gits_own_reason -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_removes_every_per_ticket_worktree -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_refusal_mid_queue_still_prints_the_discard_command -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_names_only_what_the_run_created -q",
+      "exit_code": 4
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
