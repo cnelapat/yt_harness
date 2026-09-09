@@ -134,8 +134,13 @@ class Reapprovals(list):
         self.append((tkt["id"], _git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()))
 
 
-def drive(monkeypatch, repo: Path, ids: list[str], session=None, **kw):
-    """Run the queue with the session, re-approval and final gate replaced."""
+def drive(monkeypatch, repo: Path, ids: list[str], session=None, catalog=None, **kw):
+    """Run the queue with the session, re-approval and final gate replaced.
+
+    `catalog` supplies real ticket dicts by id for the tests that need
+    `blocked_by` to say something; without it every id loads as a ticket that
+    blocks on nothing, which is what most of these tests want.
+    """
     session = session or FakeSession()
     approvals = Reapprovals()
     gates = []
@@ -146,7 +151,8 @@ def drive(monkeypatch, repo: Path, ids: list[str], session=None, **kw):
 
     monkeypatch.setattr(sq, "run_session", session)
     monkeypatch.setattr(sq, "reapprove", approvals)
-    monkeypatch.setattr(sq, "load_ticket", lambda root, tid: ticket(tid))
+    catalog = catalog or {}
+    monkeypatch.setattr(sq, "load_ticket", lambda root, tid: catalog.get(tid) or ticket(tid))
     # raising=False: the final gate is a later ticket's seam, and the earliest
     # ticket must be allowed to not have it yet rather than carry a stub.
     monkeypatch.setattr(sq, "final_gate", fake_final_gate, raising=False)
@@ -545,3 +551,28 @@ def test_refuses_to_start_from_a_per_ticket_branch(monkeypatch, repo):
         drive(monkeypatch, repo, ["T2"])
 
     assert "edad/t1" in str(e.value)
+
+
+def test_a_done_blocker_outside_the_queue_is_satisfied(monkeypatch, repo):
+    """Doneness is a property of what is on disk, not of what was typed.
+
+    D1 refuses a blocker "neither in the queue nor already carrying an evidence
+    record". T1 here is carrying one, so it is satisfied and T2 runs - even
+    though the operator named only T2. Probing doneness for the queued ids
+    alone refuses this run and says T1 has no evidence record, which is the
+    opposite of true; and the workaround, re-listing every finished ancestor on
+    every invocation, is the remembered state D12 exists to abolish.
+
+    T1 is not reported as a skipped ticket either. `Plan.done` is what the
+    operator asked for and had already finished, and they never asked for T1.
+    """
+    evidence = evidence_path(repo, "T1")
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(json.dumps({"passed": True}) + "\n")
+
+    _, session, approvals, _ = drive(
+        monkeypatch, repo, ["T2"], catalog={"T2": ticket("T2", ("T1",))}
+    )
+
+    assert session.ran == ["T2"]
+    assert [tid for tid, _ in approvals] == ["T2"]

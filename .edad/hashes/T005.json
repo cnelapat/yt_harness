@@ -1,8 +1,8 @@
 {
-  "tests/test_session_queue.py": "1c4386ff3b220048bb13fe7338b4dbfc20099af63679f52006937b58543a29ad",
+  "tests/test_session_queue.py": "382cfbb5661d22b068fe143e63e17e4e90340e99a190b457e0b2b75249fd83a1",
   "_edad": {
-    "approved_at": "2026-09-09T16:35:50.111957+00:00",
-    "ticket_sha256": "f2533f6837536d2e7842cfd5ca37304f015a5272b8e2ef3a703f14f01b6114ff",
+    "approved_at": "2026-09-09T16:56:11.424393+00:00",
+    "ticket_sha256": "c59982e247a621556bc7ffd6312ef852dd8894f4028770bbe5332b899e356618",
     "decisions": [
       "D1",
       "D6",
@@ -44,12 +44,16 @@
       {
         "command": "python3 -m pytest tests/test_session_queue.py::test_refuses_to_start_from_a_per_ticket_branch -q",
         "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_done_blocker_outside_the_queue_is_satisfied -q",
+        "exit_code": 4
       }
     ],
     "mutation_proof": null,
     "full_gate_baseline": {
-      "taken_at": "2026-09-09T16:35:48.329421+00:00",
-      "commit": "745bcd87203ec0de6e4b6b0a925c47e6cf85e2e1",
+      "taken_at": "2026-09-09T16:56:09.647044+00:00",
+      "commit": "b4ffdb116966c20f430a66e0d60dba525c4e1074",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 2,
