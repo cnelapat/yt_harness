@@ -380,3 +380,33 @@ def test_refusal_mid_queue_still_prints_the_discard_command(monkeypatch, repo, c
     # about the rollback existing, not about how it is worded.
     commands = [ln.strip() for ln in printed.splitlines() if ln.strip().startswith("git ")]
     assert any(run_branch in c and "edad/t1" in c for c in commands), printed
+
+
+def test_discard_command_names_only_what_the_run_created(monkeypatch, repo, capsys):
+    """A session does not create its branch and worktree before it does any
+    work. `preflight` runs first (`edad/session.py:604`, `:607`), so a ticket
+    refused for a missing blocker evidence record exits non-zero having created
+    neither - and in a queue that is the likeliest refusal there is, because
+    `blocked_by` is what a queue is for.
+
+    Naming them anyway is not a cosmetic overreach: the removals are chained
+    with `&&`, so the command aborts on a worktree that was never made and
+    deletes nothing at all. The operator watches a rollback scroll past and the
+    run branch is still standing afterwards. Run rather than pattern-matched,
+    for the same reason as the worktree case - every substring assertion passes
+    while the command does nothing.
+    """
+
+    def refuses_before_creating_anything(root: Path, ticket_id: str) -> int:
+        return 2
+
+    drive(monkeypatch, repo, ["T1"], session=refuses_before_creating_anything)
+
+    printed = capsys.readouterr().out
+    command = [ln.strip() for ln in printed.splitlines() if ln.strip().startswith("git ")][-1]
+    proc = subprocess.run(
+        command, cwd=repo, shell=True, capture_output=True, text=True, check=False
+    )
+
+    assert proc.returncode == 0, command + "\n" + proc.stdout + proc.stderr
+    assert _git(repo, "branch", "--format=%(refname:short)").split() == ["main"]

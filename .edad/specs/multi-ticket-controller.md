@@ -402,16 +402,17 @@ decisions:
     rejected: "skipping it as redundant — it IS redundant by derivation from D3, and this harness holds that a measured claim beats a derived one"
 
   - id: D11
-    decision: "The controller finishes with root checked out on the run branch, and prints a literal discard command naming the run branch **and every per-ticket branch**, and removing each per-ticket worktree before deleting its branch. A worktree-held branch cannot be deleted, so a command that only names the branches deletes the run branch, fails on every `edad/t00N`, and leaves a partial rollback. The summary and the discard command are printed on **every** exit path, including a mid-queue `Refusal` and a `SystemExit` raised by a gate helper such as `load_ticket`; a run that ends without printing them leaves merged work the operator has no printed way to undo."
+    decision: "The controller finishes with root checked out on the run branch, and prints a literal discard command naming the run branch **and every per-ticket branch**, and removing each per-ticket worktree before deleting its branch. A worktree-held branch cannot be deleted, so a command that only names the branches deletes the run branch, fails on every `edad/t00N`, and leaves a partial rollback. The summary and the discard command are printed on **every** exit path, including a mid-queue `Refusal` and a `SystemExit` raised by a gate helper such as `load_ticket`; a run that ends without printing them leaves merged work the operator has no printed way to undo. It names only what the run actually created: `preflight` runs before `make_worktree`, so a session refused for a missing blocker evidence record - the likeliest refusal in a queue, since `blocked_by` is what a queue is for - exits having created neither branch nor worktree, and naming them anyway aborts the command on its first step so that nothing at all is deleted."
     verify:
       - python3 -m pytest tests/test_session_queue.py::test_run_ends_with_root_on_the_run_branch -q
       - python3 -m pytest tests/test_session_queue.py::test_discard_command_names_every_per_ticket_branch -q
       - python3 -m pytest tests/test_session_queue.py::test_discard_command_removes_every_per_ticket_worktree -q
       - python3 -m pytest tests/test_session_queue.py::test_refusal_mid_queue_still_prints_the_discard_command -q
+      - python3 -m pytest tests/test_session_queue.py::test_discard_command_names_only_what_the_run_created -q
     frozen:
       - tests/test_session_queue.py
     seam: run-driver
-    rejected: "returning root to main — hides the evidence from a continuation run; and printing only the run branch in the discard command, which is a false rollback since edad/t00N branches still point at all the work; and naming those branches without removing their worktrees, which is the same false rollback one layer down — git deletes the run branch, refuses the rest, and the only ref the night can be recovered from is the one that went"
+    rejected: "returning root to main — hides the evidence from a continuation run; and printing only the run branch in the discard command, which is a false rollback since edad/t00N branches still point at all the work; and naming those branches without removing their worktrees, which is the same false rollback one layer down — git deletes the run branch, refuses the rest, and the only ref the night can be recovered from is the one that went; and naming every queued ticket regardless of whether its session got as far as creating anything, which leaves the whole chain aborting on a worktree that was never made"
 
   - id: D12
     decision: "Re-invoking the same command resumes: cut `edad/run-<ts>` only when root HEAD is not already an `edad/run-*` branch, otherwise continue on it. Tickets already carrying evidence are skipped as done and are not re-approved. Refuse to start when HEAD is neither `main` nor an `edad/run-*` branch."
