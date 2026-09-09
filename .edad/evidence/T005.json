@@ -1,0 +1,98 @@
+{
+  "ticket": "T005",
+  "started_at": "2026-09-09T17:43:14.544314+00:00",
+  "commit": "ebcd8208247afc160eee0c8c9d31cd42e0ac3a4d",
+  "base_ref": "c3e793339603f2998ba8ff12ba665387d5b28e6c",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/session_queue.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 9.1,
+      "output_tail": "........................................................................ [ 49%]\n........................................................................ [ 99%]\n.                                                                        [100%]\n145 passed in 8.93s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D1",
+    "D6",
+    "D12"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_queue_is_topologically_sorted_by_blocked_by -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_cycle_in_blocked_by_refuses_the_run -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_unsatisfiable_blocker_refuses_the_run -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_doneness_is_evidence_file_existence -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_absent_field_renders_as_not_recorded -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_false_passed_modulo_baseline_is_not_read_as_failure -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_rerunning_the_same_command_resumes_on_the_run_branch -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_done_tickets_are_skipped_and_not_reapproved -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_refuses_to_start_from_a_per_ticket_branch -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_a_done_blocker_outside_the_queue_is_satisfied -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_a_resumed_run_discards_the_whole_night -q",
+      "exit_code": 4
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_a_plan_refusal_prints_a_discard_only_when_there_is_a_night -q",
+      "exit_code": 4
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
