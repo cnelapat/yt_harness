@@ -238,9 +238,14 @@ operator agreed to.
   precisely so that `preflight` and `make_worktree` need no change.
 - **Versioning or migrating the evidence records.** A ticket of its own, for a
   three-record corpus with one differing key; D6 reads the corpus as it is instead.
-- **Cleaning up per-ticket worktrees.** They accumulate in `.edad/worktrees/`; the
-  branch holds every commit so nothing is lost, and a failed agent's scratch directory
-  stays inspectable. Disk cost only.
+- **Cleaning up per-ticket worktrees during a run.** They accumulate in
+  `.edad/worktrees/`; the branch holds every commit so nothing is lost, and a failed
+  agent's scratch directory stays inspectable. Disk cost only.
+
+  This is scoped to the run. The discard command D11 prints is not a run, and it must
+  remove the worktrees it names, because "the branch holds every commit so nothing is
+  lost" is precisely the claim `git branch -D` is about to retire. Read without that
+  boundary these two entries contradict each other, and story 15 is the one that loses.
 - **A cost or token budget.** D8 bounds wall-clock, not the bill. Deferred in the grill
   for lack of a cost signal the `claude` CLI is known to expose, and may be unbuildable
   as specified.
@@ -312,14 +317,15 @@ decisions:
     rejected: "merging each promoted branch to main — retires 'nothing unreviewed reaches mainline'; the promotion bar proves nothing was broken, not that the code is good"
 
   - id: D3
-    decision: "Tickets run strictly sequentially. Every merge of a promoted branch into the run branch is performed `--ff-only` and its sha recorded; a non-fast-forward stops the run rather than being resolved."
+    decision: "Tickets run strictly sequentially. Every merge of a promoted branch into the run branch is performed `--ff-only` and its sha recorded; a non-fast-forward stops the run rather than being resolved. The stop reports git's own output rather than an inferred cause: `--ff-only` also fails for reasons that are not divergence at all - a dirty root tree the merge would overwrite is the common one - and an alarm that names a cause it did not measure sends a half-awake operator after the wrong thing."
     verify:
       - python3 -m pytest tests/test_session_queue.py::test_promoted_branch_merges_fast_forward_only -q
       - python3 -m pytest tests/test_session_queue.py::test_non_fast_forward_stops_the_run -q
+      - python3 -m pytest tests/test_session_queue.py::test_merge_failure_reports_gits_own_reason -q
     frozen:
       - tests/test_session_queue.py
     seam: run-driver
-    rejected: "ordinary merges — a conflict at 3am has nobody to resolve it, and a resolved merge is code no full_gate ever judged"
+    rejected: "ordinary merges — a conflict at 3am has nobody to resolve it, and a resolved merge is code no full_gate ever judged; and reporting a fixed concurrency message on any merge failure, which is a guess the controller had already captured the answer to and threw away"
 
   - id: D4
     decision: "Each session is invoked as a fresh subprocess (`python3 -m edad.session run <id>`), never in-process. Its exit code is the outcome signal: 0 promoted, non-zero not."
@@ -396,14 +402,16 @@ decisions:
     rejected: "skipping it as redundant — it IS redundant by derivation from D3, and this harness holds that a measured claim beats a derived one"
 
   - id: D11
-    decision: "The controller finishes with root checked out on the run branch, and prints a literal discard command naming the run branch **and every per-ticket branch**."
+    decision: "The controller finishes with root checked out on the run branch, and prints a literal discard command naming the run branch **and every per-ticket branch**, and removing each per-ticket worktree before deleting its branch. A worktree-held branch cannot be deleted, so a command that only names the branches deletes the run branch, fails on every `edad/t00N`, and leaves a partial rollback. The summary and the discard command are printed on **every** exit path, including a mid-queue `Refusal` and a `SystemExit` raised by a gate helper such as `load_ticket`; a run that ends without printing them leaves merged work the operator has no printed way to undo."
     verify:
       - python3 -m pytest tests/test_session_queue.py::test_run_ends_with_root_on_the_run_branch -q
       - python3 -m pytest tests/test_session_queue.py::test_discard_command_names_every_per_ticket_branch -q
+      - python3 -m pytest tests/test_session_queue.py::test_discard_command_removes_every_per_ticket_worktree -q
+      - python3 -m pytest tests/test_session_queue.py::test_refusal_mid_queue_still_prints_the_discard_command -q
     frozen:
       - tests/test_session_queue.py
     seam: run-driver
-    rejected: "returning root to main — hides the evidence from a continuation run; and printing only the run branch in the discard command, which is a false rollback since edad/t00N branches still point at all the work"
+    rejected: "returning root to main — hides the evidence from a continuation run; and printing only the run branch in the discard command, which is a false rollback since edad/t00N branches still point at all the work; and naming those branches without removing their worktrees, which is the same false rollback one layer down — git deletes the run branch, refuses the rest, and the only ref the night can be recovered from is the one that went"
 
   - id: D12
     decision: "Re-invoking the same command resumes: cut `edad/run-<ts>` only when root HEAD is not already an `edad/run-*` branch, otherwise continue on it. Tickets already carrying evidence are skipped as done and are not re-approved. Refuse to start when HEAD is neither `main` nor an `edad/run-*` branch."

@@ -205,6 +205,39 @@ def test_non_fast_forward_stops_the_run(monkeypatch, repo):
     assert len(_git(repo, "rev-list", "--merges", f"main..{head}").split()) == 0
 
 
+def test_merge_failure_reports_gits_own_reason(monkeypatch, repo, capsys):
+    """`--ff-only` fails for causes that are not divergence at all, and a dirty
+    root tree it would overwrite is the common one. The controller cannot tell
+    those apart by looking, and it does not have to: git already answered, and
+    names the blocking path in an answer the controller had captured. A fixed
+    "something ran concurrently" sends a half-awake operator hunting a
+    concurrent run that never happened, while the real cause - one uncommitted
+    edit - is the one thing not on screen."""
+
+    class TouchesATrackedFile(FakeSession):
+        def __call__(self, root: Path, ticket_id: str) -> int:
+            self.ran.append(ticket_id)
+            branch = f"edad/{ticket_id.lower()}"
+            self.branches[ticket_id] = branch
+            _git(root, "branch", branch, "HEAD")
+            wt = root / ".edad" / "worktrees" / ticket_id
+            _git(root, "worktree", "add", "-q", str(wt), branch)
+            (wt / "src" / "thing.py").write_text(f"VALUE = 2  # {ticket_id}\n")
+            _git(wt, "add", "-A")
+            _git(wt, "commit", "-qm", f"{ticket_id}: work")
+            _git(root, "worktree", "remove", "--force", str(wt))
+            return 0
+
+    # One uncommitted local edit, and no concurrency anywhere in this test.
+    (repo / "src" / "thing.py").write_text("VALUE = 99  # uncommitted\n")
+
+    code, _, _, _ = drive(monkeypatch, repo, ["T1"], session=TouchesATrackedFile())
+
+    assert code != 0
+    captured = capsys.readouterr()
+    assert "src/thing.py" in captured.out + captured.err
+
+
 # --- D4: one subprocess per ticket ------------------------------------------
 
 
@@ -291,3 +324,59 @@ def test_discard_command_names_every_per_ticket_branch():
     assert "edad/run-20260909T0300" in printed
     assert "edad/t1" in printed
     assert "edad/t2" in printed
+
+
+def test_discard_command_removes_every_per_ticket_worktree(repo):
+    """The command is run here rather than pattern-matched, because the failure
+    it guards against satisfies every substring assertion that names branches.
+    A worktree-held branch cannot be deleted, and a session leaves its worktree
+    behind (`make_worktree` removes only a *pre-existing* one). So naming the
+    branches alone deletes the run branch, refuses every `edad/t00N`, and exits
+    non-zero - a partial rollback that took the one ref the night was
+    recoverable from and left all the work reachable."""
+    _git(repo, "checkout", "-q", "-b", "edad/run-20260909T0300", "main")
+    _git(repo, "branch", "edad/t1", "HEAD")
+    wt = repo / ".edad" / "worktrees" / "T1"
+    _git(repo, "worktree", "add", "-q", str(wt), "edad/t1")
+
+    printed = discard_command("edad/run-20260909T0300", ["edad/t1"], [str(wt)])
+    proc = subprocess.run(
+        printed, cwd=repo, shell=True, capture_output=True, text=True, check=False
+    )
+
+    assert proc.returncode == 0, printed + "\n" + proc.stdout + proc.stderr
+    assert _git(repo, "branch", "--format=%(refname:short)").split() == ["main"]
+
+
+def test_refusal_mid_queue_still_prints_the_discard_command(monkeypatch, repo, capsys):
+    """Making approval a subprocess removed one instance of this hazard, not the
+    hazard. A `Refusal` from `reapprove` - or the bare `SystemExit(2)` that
+    `load_ticket` raises through `gate.die()` - still ends the run between two
+    tickets, and whatever already merged is sitting on the run branch. The
+    refusal must not be swallowed, and it must not carry the discard command
+    away with it."""
+    session = FakeSession()
+
+    def refuse_on_the_second(root: Path, tkt: dict) -> None:
+        if tkt["id"] == "T2":
+            raise Refusal("T2 cannot be re-approved: tests/test_thing.py drifted")
+
+    monkeypatch.setattr(sq, "run_session", session)
+    monkeypatch.setattr(sq, "reapprove", refuse_on_the_second)
+    monkeypatch.setattr(sq, "load_ticket", lambda root, tid: ticket(tid))
+    monkeypatch.setattr(
+        sq, "final_gate", lambda root: {"passed": True, "commands": []}, raising=False
+    )
+
+    # Not swallowed: the operator still learns why the night stopped.
+    with pytest.raises(Refusal):
+        sq.run_queue(repo, ["T1", "T2", "T3"])
+
+    assert session.ran == ["T1"]
+    run_branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    printed = capsys.readouterr().out
+    # And not unprinted: some runnable command names the run branch and T1's
+    # branch together. Asserting a command rather than a phrase keeps this
+    # about the rollback existing, not about how it is worded.
+    commands = [ln.strip() for ln in printed.splitlines() if ln.strip().startswith("git ")]
+    assert any(run_branch in c and "edad/t1" in c for c in commands), printed
