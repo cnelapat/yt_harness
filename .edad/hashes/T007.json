@@ -1,0 +1,76 @@
+{
+  "tests/test_gate_red_proof.py": "66cb2a88e130096b4390ddf08c39a2dbabc0fc909f47956119bc4e634d64b982",
+  "_edad": {
+    "approved_at": "2026-09-09T21:37:49.501779+00:00",
+    "ticket_sha256": "72fd3d2f3e948cca6fb5509ac246798ba093ddbc2315856e4a136771421dace9",
+    "decisions": [
+      "D15",
+      "D16",
+      "D17",
+      "D20"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_error_only_red_proof_refuses_approval -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_failed_at_a_frozen_node_id_is_a_red_proof -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_failed_outside_the_frozen_files_does_not_supply_the_red_proof -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_a_command_without_its_own_failed_refuses_and_names_it -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_non_pytest_command_cannot_supply_the_red_proof -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_acceptance_set_with_no_pytest_command_refuses -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_lock_records_detected_by_for_each_red_proof_command -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_record_carries_red_proof_detected_by -q",
+        "exit_code": 1
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_report_names_a_pre_amendment_red_proof_when_detected_by_is_absent -q",
+        "exit_code": 1
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-09T21:37:47.714516+00:00",
+      "commit": "b08c6c74afc9c553fb7797a3279e0fbe408624e7",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_gate_red_proof.py::test_error_only_red_proof_refuses_approval": 1,
+            "pytest:tests/test_gate_red_proof.py::test_failed_at_a_frozen_node_id_is_a_red_proof": 1,
+            "pytest:tests/test_gate_red_proof.py::test_failed_outside_the_frozen_files_does_not_supply_the_red_proof": 1,
+            "pytest:tests/test_gate_red_proof.py::test_a_command_without_its_own_failed_refuses_and_names_it": 1,
+            "pytest:tests/test_gate_red_proof.py::test_non_pytest_command_cannot_supply_the_red_proof": 1,
+            "pytest:tests/test_gate_red_proof.py::test_acceptance_set_with_no_pytest_command_refuses": 1,
+            "pytest:tests/test_gate_red_proof.py::test_lock_records_detected_by_for_each_red_proof_command": 1,
+            "pytest:tests/test_gate_red_proof.py::test_record_carries_red_proof_detected_by": 1,
+            "pytest:tests/test_gate_red_proof.py::test_report_names_a_pre_amendment_red_proof_when_detected_by_is_absent": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
