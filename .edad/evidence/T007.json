@@ -1,0 +1,87 @@
+{
+  "ticket": "T007",
+  "started_at": "2026-09-09T21:49:44.258260+00:00",
+  "commit": "58b350d4bce08c4657210eac3b2a40a6468c3679",
+  "base_ref": "0e1f9af2a2a0baf1fa40119e3a3b28502dcba2b0",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/gate.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 8.95,
+      "output_tail": "........................................................................ [ 46%]\n........................................................................ [ 93%]\n..........                                                               [100%]\n154 passed in 8.79s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D15",
+    "D16",
+    "D17",
+    "D20"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_error_only_red_proof_refuses_approval -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_failed_at_a_frozen_node_id_is_a_red_proof -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_failed_outside_the_frozen_files_does_not_supply_the_red_proof -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_a_command_without_its_own_failed_refuses_and_names_it -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_non_pytest_command_cannot_supply_the_red_proof -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_acceptance_set_with_no_pytest_command_refuses -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_lock_records_detected_by_for_each_red_proof_command -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_record_carries_red_proof_detected_by -q",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_report_names_a_pre_amendment_red_proof_when_detected_by_is_absent -q",
+      "exit_code": 1
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
