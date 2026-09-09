@@ -16,9 +16,14 @@ venv/
 # promoted by the controller and committed beside the code it verifies.
 # The ticket and its approval lock are committed too — they are the contract.
 
-# Session logs are telemetry, like records. Worktrees are scratch.
+# Session logs are telemetry, like records. Worktrees are scratch. So is the
+# run log: one file per queue run, disposable, and read in the morning rather
+# than kept. Committing it would be worse than untidy — the run branch is what
+# the operator reviews and merges, and a log of the night written into that
+# diff is a file no ticket's scope allows.
 .edad/sessions/
 .edad/worktrees/
+.edad/runs/
 
 # Claude Code writes this per-machine during a session. Uncommitted it shows up
 # as a stray in the agent's diff and trips the scope check on an innocent ticket.

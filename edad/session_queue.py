@@ -25,10 +25,12 @@ T004's decisions are here: D2 the integration branch, D3 fast-forward merges,
 D4 one subprocess per ticket, D5 just-in-time re-approval, D11 where the run
 leaves you. T005's are here too: D1 the queue is a plan computed before
 anything executes, D6 doneness is the evidence record's existence, D12
-re-invoking the same command resumes. T006's (D7, D8, D9, D10) are present as
-signatures only - the block below `# --- T006` is stubs, standing in for work
-that ticket has not done yet, and every one of them returns the wrong answer on
-purpose.
+re-invoking the same command resumes. And T006's: D7 a failure is local, D8 two
+breakers for the failures that are not about the tickets, D9 one run log, D10
+one measured full gate on the run branch tip at the end. A bad night needs
+nothing undone - the tip is verified after every merge, so an aborted ticket
+leaves it where the last promotion did, and the only open question is what may
+still run. `RunState` answers it and `run_queue` folds over that answer.
 
 D13 is unenforced: v1 is sequential. `plan_run` computes `Plan.independent`
 and nothing acts on it, so a later scheduler is a change rather than a
@@ -39,15 +41,18 @@ rather than assumed.
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from edad.gate import check_freeze, load_ticket, repo_root
+from edad.gate import check_freeze, command_timeout, load_ticket, repo_root, run_commands
+from edad.session import MAX_NO_PROGRESS, PROMOTED_OUTCOMES
 
 MAIN_BRANCH = "main"
 # HEAD is the whole memory of a run (D12), so the prefix is what tells a
@@ -446,24 +451,16 @@ def run_session(root: Path, ticket_id: str) -> int:
     return subprocess.run(session_argv(ticket_id), cwd=root, check=False).returncode
 
 
-# --- T006: D7, D8, D9, D10 - signatures only --------------------------------
-#
-# Deliberately wrong, and here only so `approve` can take a red proof that
-# means something. With the module importable, each frozen test reaches its
-# assertions and fails there - `FAILED <file>::<test>` - rather than dying in
-# collection. An `ERROR` says an import broke, which is true of a test that
-# asserts nothing just as readily, so it proves nothing about the assertions
-# the freeze is meant to hold the agent to.
-#
-# Every return below is a value no acceptance test accepts. That is the point:
-# a stub that happened to satisfy its test would be a passing acceptance
-# command at approve time, which is refused for the same reason.
+# --- D7: a failure is local -------------------------------------------------
 
 
 def skip_reason(failed_id: str) -> str:
     """Names the ticket that caused the skip, so the morning's triage is one
     line rather than a reconstruction of the dependency graph."""
-    return ""
+    return f"blocked by {failed_id}, which failed"
+
+
+# --- D8: breakers, for failures that are not about the tickets --------------
 
 
 def no_commit_abort(session_log: dict) -> bool:
@@ -471,11 +468,14 @@ def no_commit_abort(session_log: dict) -> bool:
     that made a commit.
 
     Reads the log `edad.session` already writes - `asdict(SessionLog)`, so
-    `outcome` against `PROMOTED_OUTCOMES` and `iterations[].made_commit`. An
-    agent that exits non-zero and commits nothing is not failing the ticket, it
-    is not running.
+    `outcome` against that module's own `PROMOTED_OUTCOMES` rather than a copy
+    of it here, and `iterations[].made_commit`. An agent that exits non-zero and
+    commits nothing is not failing the ticket, it is not running; an empty
+    `iterations` is the strongest case of that, not an edge one.
     """
-    return False
+    if (session_log.get("outcome") or "") in PROMOTED_OUTCOMES:
+        return False
+    return not any(step.get("made_commit") for step in session_log.get("iterations") or [])
 
 
 def breaker_fired(
@@ -483,11 +483,37 @@ def breaker_fired(
 ) -> str | None:
     """`"no_progress"`, `"wall_clock"`, or `None`. Pure, keyword-only.
 
-    `budget_s=None` means no wall-clock bound. Wall-clock is the bound the
-    operator agreed to when they went to bed; it does not bound the bill, and
-    nothing here does.
+    `MAX_NO_PROGRESS` is the session's own threshold read one level up: inside a
+    session it counts iterations that changed nothing, here it counts whole
+    sessions that did. `budget_s=None` means no wall-clock bound. Wall-clock is
+    the bound the operator agreed to when they went to bed; it does not bound
+    the bill, and nothing here does. Keyword-only because all three arguments
+    are numbers, and a positional call that transposed two would still run.
     """
+    if no_commit_aborts >= MAX_NO_PROGRESS:
+        return "no_progress"
+    if budget_s is not None and elapsed_s > budget_s:
+        return "wall_clock"
     return None
+
+
+# --- D9: the run log --------------------------------------------------------
+
+
+def log_entry(status: str, **fields) -> dict:
+    """One ticket's line in the run log, every key present and null rather than
+    absent - so a reader never has to tell "no merge sha because it never ran"
+    from "no merge sha key in this shape of entry"."""
+    entry = {
+        "status": status,
+        "merge_sha": None,
+        "session_log": None,
+        "skip_reason": None,
+        "elapsed_s": None,
+        "at_s": None,
+    }
+    entry.update(fields)
+    return entry
 
 
 class RunState:
@@ -502,24 +528,131 @@ class RunState:
     `as_log()` returns the run-log payload with `breaker` a **separate key**
     from `tickets`: a ticket the breaker never reached did not fail, and a log
     that conflated the two would send the operator to debug a ticket that never
-    ran.
+    ran. Those tickets are in the log too, as `not_run` - being able to say
+    which ones the night never got to is the other half of the same distinction.
     """
 
     def __init__(self, plan: Plan, tickets: dict[str, dict], budget_s: float | None = None):
         self.plan = plan
         self.tickets = tickets
         self.budget_s = budget_s
+        self.started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # monotonic, because the budget is a duration: a clock stepped by NTP
+        # or by a DST change mid-night would otherwise fire the breaker, or
+        # silently unbound it.
+        self.started = time.monotonic()
         self.skipped: dict[str, str] = {}
         self.breaker: str | None = None
+        self.outcomes: dict[str, dict] = {}
+        self.no_commit_aborts = 0
+        self.final_gate: dict | None = None
+
+    def elapsed_s(self) -> float:
+        return time.monotonic() - self.started
+
+    def record(self, ticket_id: str, status: str, **fields) -> dict:
+        """Create or update one ticket's entry, keeping what is already there:
+        the caller writes the session log path and the timings down as soon as
+        the session returns, and no later exit path has to re-attach them."""
+        entry = self.outcomes.setdefault(ticket_id, log_entry(status))
+        entry.update(status=status, at_s=round(self.elapsed_s(), 3), **fields)
+        return entry
+
+    def dependents(self, ticket_id: str) -> list[str]:
+        """Everything in the queue transitively reachable from `ticket_id`
+        through `blocked_by`. Reachability rather than the immediate edge: a
+        ticket two hops away does not name the failure, and nothing it needs can
+        exist without it either."""
+        reached: set[str] = set()
+        frontier = [ticket_id]
+        while frontier:
+            blocker = frontier.pop()
+            for queued in self.plan.order:
+                if queued == ticket_id or queued in reached:
+                    continue
+                if blocker in blockers_of(self.tickets, queued):
+                    reached.add(queued)
+                    frontier.append(queued)
+        return [t for t in self.plan.order if t in reached]
+
+    def check_breaker(self) -> str | None:
+        """The first breaker to fire wins and stands: re-deciding each time
+        would let a later reading rename the reason the night stopped."""
+        if self.breaker is None:
+            self.breaker = breaker_fired(
+                no_commit_aborts=self.no_commit_aborts,
+                elapsed_s=self.elapsed_s(),
+                budget_s=self.budget_s,
+            )
+        return self.breaker
+
+    def promote(self, ticket_id: str, merge_sha: str) -> None:
+        self.no_commit_aborts = 0
+        self.record(ticket_id, "promoted", merge_sha=merge_sha)
+        self.check_breaker()
 
     def fail(self, ticket_id: str, session_log: dict | None = None) -> None:
-        return None
+        """Mark it failed, skip what it blocks, and count it toward the breaker.
+
+        `session_log=None` means the log could not be read, and it resets the
+        count rather than raising it. The breaker exists to stop a night that is
+        not running; firing it on the absence of evidence would stop a night on
+        a guess.
+        """
+        self.record(ticket_id, "failed")
+        if session_log is not None and no_commit_abort(session_log):
+            self.no_commit_aborts += 1
+        else:
+            self.no_commit_aborts = 0
+        for dependent in self.dependents(ticket_id):
+            # First cause wins: a ticket already skipped keeps the failure that
+            # actually stopped it, not whichever later one also reaches it.
+            if dependent in self.outcomes:
+                continue
+            self.skipped[dependent] = skip_reason(ticket_id)
+            self.record(dependent, "skipped", skip_reason=self.skipped[dependent])
+        self.check_breaker()
 
     def remaining(self) -> list[str]:
-        return []
+        """Still to run: queued, and not yet promoted, failed or skipped."""
+        return [t for t in self.plan.order if t not in self.outcomes]
 
     def as_log(self) -> dict:
-        return {"tickets": {}, "breaker": None, "final_gate": None}
+        tickets = dict(self.outcomes)
+        for ticket_id in sorted(self.plan.done):
+            tickets.setdefault(ticket_id, log_entry("already done"))
+        for ticket_id in self.remaining():
+            tickets.setdefault(ticket_id, log_entry("not_run"))
+        return {
+            "started_at": self.started_at,
+            "elapsed_s": round(self.elapsed_s(), 3),
+            "tickets": tickets,
+            "breaker": self.breaker,
+            "final_gate": self.final_gate,
+        }
+
+
+def session_logs(root: Path, ticket_id: str) -> set[Path]:
+    """The session logs on disk for one ticket, as paths."""
+    return set((Path(root) / ".edad" / "sessions").glob(f"{ticket_id}-*.json"))
+
+
+def read_new_log(before: set[Path], after: set[Path]) -> tuple[str | None, dict | None]:
+    """The log this session just wrote, and its contents.
+
+    Identified by difference rather than by "the newest one", because a resumed
+    run re-running a ticket that already has logs would otherwise read an
+    earlier night's - and an old aborted log counted as this session's is a
+    false no-commit abort, which is half of a breaker.
+    """
+    written = sorted(after - before)
+    if not written:
+        return None, None
+    path = written[-1]
+    try:
+        return str(path), json.loads(path.read_text())
+    except (OSError, ValueError):
+        return str(path), None
 
 
 # --- the driver -------------------------------------------------------------
@@ -548,9 +681,9 @@ def report_merge_refusal(branch: str, run: str, merge: subprocess.CompletedProce
 
 def print_summary(
     run_branch: str,
-    results: list[tuple[str, str, str | None]],
-    ticket_branches: list[str],
-    worktree_paths: list[str],
+    tickets: dict[str, dict],
+    ticket_branches: Sequence[str],
+    worktree_paths: Sequence[str],
 ) -> None:
     """The summary and the rollback, printed on every exit path that has a run
     branch - a clean finish, a merge git refused, a `Refusal` raised between two
@@ -561,14 +694,44 @@ def print_summary(
     branch exists, so a discard command there names a branch that was never
     created, `git branch -D` fails, and the operator watches a rollback that
     could not have worked. The discard command goes last, so it is the final
-    runnable line."""
+    runnable line. `tickets` is the run log's own per-ticket mapping, so the
+    screen and the file cannot disagree about what happened to any one of them."""
     print(f"\nrun branch: {run_branch}")
-    if not results:
+    if not tickets:
         print("  (no ticket ran)")
-    for ticket_id, outcome, sha in results:
-        print(f"  {ticket_id}: {outcome}" + (f", merged {sha[:12]}" if sha else ""))
+    for ticket_id, entry in tickets.items():
+        line = f"  {ticket_id}: {entry['status']}"
+        if entry["merge_sha"]:
+            line += f", merged {entry['merge_sha'][:12]}"
+        if entry["skip_reason"]:
+            line += f" ({entry['skip_reason']})"
+        print(line)
     print("\nto discard this run entirely:")
     print("  " + discard_command(run_branch, ticket_branches, worktree_paths))
+
+
+# --- D10: one measured claim at the end -------------------------------------
+
+
+def final_gate_spec(root: Path) -> tuple[list[str], int]:
+    """What a repo-wide full gate is here, and how long any one command gets.
+
+    Taken from the tickets rather than from a second list, for the reason
+    ordering is taken from `blocked_by`: a gate definition kept beside the one
+    the tickets already carry is a place for the two to disagree. `full_gate`
+    runs repo-wide by construction, so every ticket's list is a claim about the
+    same tree; the union is every command any of them counts as the gate, and
+    the longest declared timeout is the one that does not cut a suite short.
+    """
+    commands: list[str] = []
+    timeout_s = command_timeout({})
+    for path in sorted((Path(root) / ".edad" / "tickets").glob("*.md")):
+        ticket = load_ticket(root, path.stem)
+        timeout_s = max(timeout_s, command_timeout(ticket))
+        for command in ticket.get("full_gate") or []:
+            if command not in commands:
+                commands.append(command)
+    return commands, timeout_s
 
 
 def final_gate(root: Path) -> dict:
@@ -579,11 +742,156 @@ def final_gate(root: Path) -> dict:
     because this harness holds that a measured claim beats a derived one. If it
     ever fails while every ticket promoted, the derivation is wrong somewhere;
     the run log reports it and nothing else is designed.
+
+    No ratchet and no baseline: those answer "did this ticket break something",
+    against one ticket's approval lock. This asks the plainer question the night
+    ends on - is the tree the operator will read in the morning green.
     """
-    return {"passed": False, "commands": []}
+    commands, timeout_s = final_gate_spec(root)
+    results = run_commands(root, commands, deny_network=True, timeout_s=timeout_s)
+    return {
+        "passed": all(c.ok for c in results),
+        "commands": [
+            {
+                "command": c.command,
+                "exit_code": c.exit_code,
+                "duration_s": c.duration_s,
+                "timed_out": c.timed_out,
+                "output_tail": c.output_tail,
+            }
+            for c in results
+        ],
+    }
 
 
-def run_queue(root: Path, ticket_ids: list[str]) -> int:
+def report_final_gate(gate: dict) -> None:
+    """Loudly, and to stderr. By D10's derivation this cannot happen, so if it
+    did the derivation is wrong somewhere and no automated response would be
+    trustworthy - reporting it is the whole designed reaction."""
+    if gate.get("passed"):
+        return
+    print(
+        "\nthe final full gate FAILED on the run branch tip. Every promoted ticket "
+        "passed a full gate against this same code, so this should have been "
+        "impossible: something the harness derives is wrong. Nothing is undone "
+        "automatically - the run log has the commands and their output.",
+        file=sys.stderr,
+    )
+    for command in gate.get("commands") or []:
+        if command["exit_code"] != 0:
+            print(f"  failed ({command['exit_code']}): {command['command']}", file=sys.stderr)
+
+
+def write_run_log(root: Path, run_branch: str, state: RunState) -> Path:
+    """One file the morning can be read from.
+
+    Telemetry, so `.edad/runs/` is gitignored beside `.edad/records/` and
+    `.edad/sessions/`. Committing it would be worse than untidy: the run branch
+    is what the operator reviews, and a log of the night in that diff is a file
+    no ticket's scope allows.
+    """
+    directory = Path(root) / ".edad" / "runs"
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = state.as_log()
+    payload["run_branch"] = run_branch
+    stamp = state.started_at.replace(":", "").replace("-", "")[:15]
+    path = directory / f"{stamp}.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
+def exit_code(state: RunState) -> int:
+    """0 only if every queued ticket promoted or was already done, no breaker
+    fired, and the final gate passed. A breaker is a non-zero exit even though
+    no ticket failed: the night did not do what it was asked."""
+    settled = {"promoted", "already done"}
+    if any(e["status"] not in settled for e in state.as_log()["tickets"].values()):
+        return 1
+    if state.breaker is not None:
+        return 1
+    return 0 if state.final_gate is None or state.final_gate.get("passed") else 1
+
+
+@dataclass
+class Created:
+    """What this invocation made, and so what the rollback must name.
+
+    Checked rather than assumed: `preflight` runs before a session creates its
+    branch and worktree (`edad/session.py:604`, `:607`), so a ticket refused for
+    a missing blocker record leaves neither - the likeliest refusal in a queue,
+    since `blocked_by` is what a queue is for. Naming them anyway aborts the
+    discard command's `&&` chain on its first step, and the rollback the
+    operator watched scroll past deleted nothing at all.
+    """
+
+    branches: list[str] = field(default_factory=list)
+    worktrees: list[str] = field(default_factory=list)
+
+
+def work_one(root: Path, ticket_id: str, state: RunState, created: Created, run: str) -> bool:
+    """Re-approve, run, record, merge. False means the run stops here.
+
+    A ticket that fails returns True: the failure is local (D7), `state.fail`
+    has already skipped everything that needed it, and whatever is independent
+    of it still deserves the night. Only a merge git refused stops the queue -
+    from there the run branch is in a state nothing here may resolve without
+    putting unjudged code on it.
+    """
+    reapprove(root, state.tickets[ticket_id])
+    before = session_logs(root, ticket_id)
+    started = time.monotonic()
+    outcome = outcome_of(run_session(root, ticket_id))
+    log_path, session_log = read_new_log(before, session_logs(root, ticket_id))
+    state.record(
+        ticket_id, outcome, session_log=log_path, elapsed_s=round(time.monotonic() - started, 3)
+    )
+
+    # Independently: a session can leave a branch with no worktree, or a
+    # worktree without having promoted.
+    branch = f"edad/{ticket_id.lower()}"
+    if branch_exists(root, branch):
+        created.branches.append(branch)
+    worktree = root / ".edad" / "worktrees" / ticket_id
+    if worktree.resolve() in registered_worktrees(root):
+        created.worktrees.append(str(worktree))
+
+    if outcome != "promoted":
+        state.fail(ticket_id, session_log=session_log)
+        return True
+
+    merge = subprocess.run(
+        ["git", "-C", str(root), "merge", "--ff-only", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if merge.returncode != 0:
+        state.record(ticket_id, "promoted, merge refused")
+        report_merge_refusal(branch, run, merge)
+        return False
+    state.promote(ticket_id, git(root, "rev-parse", "HEAD"))
+    return True
+
+
+def work_queue(root: Path, state: RunState, created: Created, run_branch: str) -> None:
+    """The queue, ticket by ticket, until it drains or a breaker fires.
+
+    The breaker is checked before each ticket rather than after: firing it after
+    spawning the session it was meant to prevent spends exactly the hour the
+    budget existed to save.
+    """
+    for ticket_id in state.plan.order:
+        if ticket_id in state.skipped:
+            continue
+        if state.check_breaker() is not None:
+            break
+        if not work_one(root, ticket_id, state, created, run_branch):
+            break
+    state.final_gate = final_gate(root)
+    report_final_gate(state.final_gate)
+
+
+def run_queue(root: Path, ticket_ids: list[str], budget_s: float | None = None) -> int:
     """Plan the queue, then work it on an integration branch.
 
     The plan comes first and is made from the tickets' own `blocked_by` (D1),
@@ -604,6 +912,11 @@ def run_queue(root: Path, ticket_ids: list[str]) -> int:
     human intervened, and resolving it by hand would put code on the run branch
     that no `full_gate` ever judged.
 
+    A ticket that fails takes down only what depended on it (D7); two breakers
+    stop the whole queue for reasons that are not about the tickets at all (D8);
+    the night is written to one file (D9) and ends with one measured full gate
+    on the run branch tip (D10).
+
     Root is left on the run branch. Returning it to `main` would hide the
     night's work from a continuation run, which finds the branch by looking at
     HEAD.
@@ -620,7 +933,7 @@ def run_queue(root: Path, ticket_ids: list[str]) -> int:
         # back; resumed, a night is already standing on the run branch and the
         # way to throw it away has to be on screen.
         if resumed:
-            print_summary(run_branch, [], rollback_branches(root, run_branch), [])
+            print_summary(run_branch, {}, rollback_branches(root, run_branch), [])
         raise
 
     if not resumed:
@@ -632,66 +945,30 @@ def run_queue(root: Path, ticket_ids: list[str]) -> int:
                 f"could not cut {run_branch} from {MAIN_BRANCH}: {(e.stderr or e.stdout).strip()}"
             ) from e
 
-    results: list[tuple[str, str, str | None]] = [
-        (ticket_id, "already done, skipped", None)
-        for ticket_id in ticket_ids
-        if ticket_id in plan.done
-    ]
-    # What this invocation created, checked rather than assumed. A session does
-    # not create its branch and worktree before it does any work: `preflight`
-    # runs first (edad/session.py:604, :607), so a ticket refused for a missing
-    # blocker evidence record leaves neither - and in a queue that is the
-    # likeliest refusal there is, because `blocked_by` is what a queue is for.
-    # Naming them anyway aborts the discard command's `&&` chain on its first
-    # step, so the rollback the operator watched scroll past deleted nothing and
-    # the run branch is still standing. `rollback_branches` adds what earlier
-    # invocations left on the same run branch.
-    created: list[str] = []
-    worktree_paths: list[str] = []
-    code = 0
+    state = RunState(plan, tickets, budget_s=budget_s)
+    created = Created()
 
     try:
-        for ticket_id in plan.order:
-            reapprove(root, tickets[ticket_id])
-            outcome = outcome_of(run_session(root, ticket_id))
-
-            # Independently: a session can leave a branch with no worktree, or
-            # a worktree without having promoted.
-            branch = f"edad/{ticket_id.lower()}"
-            if branch_exists(root, branch):
-                created.append(branch)
-            worktree = root / ".edad" / "worktrees" / ticket_id
-            if worktree.resolve() in registered_worktrees(root):
-                worktree_paths.append(str(worktree))
-
-            if outcome != "promoted":
-                results.append((ticket_id, outcome, None))
-                code = 1
-                continue
-
-            merge = subprocess.run(
-                ["git", "-C", str(root), "merge", "--ff-only", branch],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if merge.returncode != 0:
-                results.append((ticket_id, "promoted, merge refused", None))
-                code = 1
-                report_merge_refusal(branch, run_branch, merge)
-                break
-
-            results.append((ticket_id, outcome, git(root, "rev-parse", "HEAD")))
+        work_queue(root, state, created, run_branch)
     finally:
         # Every exit path, including a mid-queue `Refusal` and the bare
         # SystemExit(2) that `load_ticket` raises through `gate.die()`. Making
         # approval a subprocess removed one instance of that hazard; it did not
-        # remove the hazard.
+        # remove the hazard. `rollback_branches` adds what earlier invocations
+        # left on the same run branch, which is what makes a resumed run's
+        # discard cover the whole night rather than this invocation's part.
+        if state.breaker is not None:
+            print(f"\nbreaker: {state.breaker}. The queue stopped; the tickets it never")
+            print("reached did not fail and are logged as not_run.")
+        print(f"\nrun log: {write_run_log(root, run_branch, state)}")
         print_summary(
-            run_branch, results, rollback_branches(root, run_branch, created), worktree_paths
+            run_branch,
+            state.as_log()["tickets"],
+            rollback_branches(root, run_branch, created.branches),
+            created.worktrees,
         )
 
-    return code
+    return exit_code(state)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -699,13 +976,22 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a queue of approved tickets on one integration branch")
     r.add_argument("tickets", nargs="+", help="ticket ids, in the order they should run")
+    r.add_argument(
+        "--budget-hours",
+        type=float,
+        default=None,
+        help="stop the queue once this much wall clock has passed. Bounds the "
+        "night, not the bill - nothing here bounds the bill. Omitted, the queue "
+        "runs until it drains.",
+    )
     return p
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    budget_s = None if args.budget_hours is None else args.budget_hours * 3600
     try:
-        return run_queue(repo_root(), args.tickets)
+        return run_queue(repo_root(), args.tickets, budget_s=budget_s)
     except Refusal as e:
         print(f"edad: {e}", file=sys.stderr)
         return 2
