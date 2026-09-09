@@ -1,8 +1,8 @@
 {
-  "tests/test_session_queue.py": "0bb35f2574545a150075ffe1e6987e554b25845c1e5368922a69227ad83ebeb7",
+  "tests/test_session_queue.py": "91f2a704adb934296369b339189bfa9c747e0b7eda4e35e10a660c345be4af90",
   "_edad": {
-    "approved_at": "2026-09-09T14:51:11.478633+00:00",
-    "ticket_sha256": "c0f127aece3cad622b0a72dd9d294fa434bba7a429406dcfe169361a68ad20fd",
+    "approved_at": "2026-09-09T15:17:58.400183+00:00",
+    "ticket_sha256": "289539bf83f27e25111b7a7f26dcab52185bc6205dc9c751224384e844e12f16",
     "decisions": [
       "D2",
       "D3",
@@ -54,12 +54,24 @@
       {
         "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_names_every_per_ticket_branch -q",
         "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_merge_failure_reports_gits_own_reason -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_removes_every_per_ticket_worktree -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_refusal_mid_queue_still_prints_the_discard_command -q",
+        "exit_code": 4
       }
     ],
     "mutation_proof": null,
     "full_gate_baseline": {
-      "taken_at": "2026-09-09T14:51:09.734889+00:00",
-      "commit": "2105384c727a443f01ac8a68cc0e8fb7265ab5d5",
+      "taken_at": "2026-09-09T15:17:56.033468+00:00",
+      "commit": "b9cdcfd9dc97afda7452d2f8303a7b88c82a12ad",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 2,
