@@ -19,9 +19,9 @@ moment the module appears that single key becomes thirty node ids the ratchet
 has never seen. Authoring per ticket keeps each `full_gate` winnable, and costs
 nothing, because the locks are used in sequence rather than concurrently.
 
-T004's decisions are here, and T005's (D1, D6, D12). T006's (D7, D8, D9, D10)
-were drafted against this same design and are recoverable in full from commit
-`1a48d51`; re-author them from there when their ticket comes up.
+T004's decisions are here, T005's (D1, D6, D12), and T006's (D7, D8, D9, D10),
+the last re-authored from the full draft in commit `1a48d51`. With D10 the spec
+is covered, so this file is complete rather than merely current.
 
 `run_queue` is exercised against a real repository, because every claim it
 makes is about git topology: that a branch was cut from `main`, that `main` did
@@ -44,15 +44,21 @@ import pytest
 from edad import session_queue as sq
 from edad.session_queue import (
     Refusal,
+    RunState,
+    breaker_fired,
     discard_command,
     evidence_path,
     field_display,
     is_done,
+    no_commit_abort,
     outcome_of,
     plan_run,
     session_argv,
+    skip_reason,
     verdict,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -73,6 +79,21 @@ def tickets(*pairs: tuple[str, tuple[str, ...]]) -> dict[str, dict]:
 
 # A chain and a bystander: T2 gates T3, and T4 depends on nothing.
 CHAIN = tickets(("T1", ()), ("T2", ("T1",)), ("T3", ("T2",)), ("T4", ()))
+
+# Session logs as `edad.session` actually writes them: `asdict(SessionLog)`, so
+# `outcome` and `iterations[].made_commit` are that dataclass's own field names.
+# Only the keys `no_commit_abort` reads are given; a whole log would assert the
+# shape of fields this decision does not depend on.
+ABORTED_WITHOUT_COMMIT = {
+    "ticket": "T1",
+    "outcome": "aborted",
+    "iterations": [{"n": 1, "made_commit": False}, {"n": 2, "made_commit": False}],
+}
+ABORTED_AFTER_COMMITTING = {
+    "ticket": "T1",
+    "outcome": "aborted",
+    "iterations": [{"n": 1, "made_commit": True}, {"n": 2, "made_commit": True}],
+}
 
 
 @pytest.fixture
@@ -653,3 +674,134 @@ def test_a_plan_refusal_prints_a_discard_only_when_there_is_a_night(monkeypatch,
         ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.strip().startswith("git ")
     ]
     assert any(run_branch in c and "edad/t1" in c for c in commands), commands
+
+
+# --- D7: a failure is local -------------------------------------------------
+
+
+def test_failed_ticket_skips_its_transitive_dependents():
+    """Reachability, not the immediate edge: T3 does not name T1, but nothing
+    it needs can exist without it."""
+    state = RunState(plan_run(CHAIN, ["T1", "T2", "T3", "T4"], done=set()), CHAIN)
+
+    state.fail("T1")
+
+    assert set(state.skipped) == {"T2", "T3"}
+
+
+def test_independent_tickets_continue_after_a_failure():
+    """Stopping the queue on the first failure is safe, simple, and spends the
+    night on nothing when one ticket is merely hard."""
+    state = RunState(plan_run(CHAIN, ["T1", "T2", "T3", "T4"], done=set()), CHAIN)
+
+    state.fail("T2")
+
+    assert "T4" not in state.skipped
+    assert "T4" in state.remaining()
+
+
+def test_skip_reason_names_the_failed_ticket():
+    """So the morning's triage is one line rather than a reconstruction of the
+    dependency graph."""
+    state = RunState(plan_run(CHAIN, ["T1", "T2", "T3", "T4"], done=set()), CHAIN)
+
+    state.fail("T2")
+
+    assert "T2" in state.skipped["T3"]
+    assert "T2" in skip_reason("T2")
+
+
+# --- D8: breakers, for failures that are not about the tickets --------------
+
+
+def test_two_consecutive_no_commit_aborts_stop_the_queue():
+    """MAX_NO_PROGRESS's signature, one level up. An agent that exits non-zero
+    and commits nothing is not failing the ticket, it is not running - and a
+    token that dies at 3am burns every remaining ticket into a false 'failed',
+    which is detectable after the second one."""
+    assert no_commit_abort(ABORTED_WITHOUT_COMMIT) is True
+    assert no_commit_abort(ABORTED_AFTER_COMMITTING) is False
+
+    state = RunState(plan_run(CHAIN, ["T1", "T2", "T3", "T4"], done=set()), CHAIN)
+    state.fail("T1", session_log=ABORTED_WITHOUT_COMMIT)
+    assert state.breaker is None
+    state.fail("T4", session_log=ABORTED_WITHOUT_COMMIT)
+
+    assert state.breaker == "no_progress"
+
+
+def test_wall_clock_budget_stops_the_queue():
+    """Wall-clock is the bound the operator actually agreed to when they went
+    to bed. It does not bound the bill; nothing here does."""
+    assert breaker_fired(no_commit_aborts=0, elapsed_s=61, budget_s=60) == "wall_clock"
+    assert breaker_fired(no_commit_aborts=0, elapsed_s=59, budget_s=60) is None
+    assert breaker_fired(no_commit_aborts=0, elapsed_s=10**9, budget_s=None) is None
+
+
+def test_breaker_firing_is_recorded_distinctly_from_a_ticket_failure():
+    """A ticket the breaker never reached did not fail, and a run log that
+    conflated the two would send the operator to debug a ticket that never
+    ran."""
+    state = RunState(plan_run(CHAIN, ["T1", "T2", "T3", "T4"], done=set()), CHAIN)
+    state.fail("T1", session_log=ABORTED_WITHOUT_COMMIT)
+    state.fail("T4", session_log=ABORTED_WITHOUT_COMMIT)
+
+    log = state.as_log()
+
+    assert log["breaker"] == "no_progress"
+    assert "T3" not in [t for t, o in log["tickets"].items() if o["status"] == "failed"]
+    assert log["tickets"]["T3"]["status"] == "skipped"
+
+
+# --- D9: the run log --------------------------------------------------------
+
+
+def test_run_log_records_outcome_and_merge_sha_per_ticket(monkeypatch, repo):
+    """One file to read in the morning, and the merge sha is what lets a
+    reviewer walk the night ticket by ticket rather than as one diff."""
+    drive(monkeypatch, repo, ["T1", "T2"])
+
+    logs = sorted((repo / ".edad" / "runs").glob("*.json"))
+    log = json.loads(logs[-1].read_text())
+
+    for tid in ("T1", "T2"):
+        assert log["tickets"][tid]["status"] == "promoted"
+        assert len(log["tickets"][tid]["merge_sha"]) == 40
+    assert log["tickets"]["T1"]["merge_sha"] != log["tickets"]["T2"]["merge_sha"]
+
+
+def test_run_log_is_gitignored_telemetry():
+    """It joins `.edad/records/` and `.edad/sessions/` on the split .gitignore
+    already documents: telemetry is disposable and never committed, evidence is
+    committed beside the code it verifies. Committing the run log onto the
+    integration branch would break that."""
+    proc = subprocess.run(
+        ["git", "-C", str(PROJECT_ROOT), "check-ignore", "-q", ".edad/runs/20260909.json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, ".edad/runs/ is not gitignored"
+
+
+# --- D10: one measured claim at the end -------------------------------------
+
+
+def test_final_full_gate_runs_on_the_run_branch_tip(monkeypatch, repo):
+    """Redundant by derivation from the fast-forward property - and this harness
+    holds that a measured claim beats a derived one. If it ever fails while
+    every ticket promoted, the derivation is wrong somewhere."""
+    _, _, _, gates = drive(monkeypatch, repo, ["T1", "T2"])
+
+    assert gates == [_git(repo, "rev-parse", "HEAD").strip()]
+
+
+def test_final_gate_result_is_in_the_run_log(monkeypatch, repo):
+    """Where the operator reads it. There is no designed handling beyond
+    reporting it loudly."""
+    drive(monkeypatch, repo, ["T1"])
+
+    logs = sorted((repo / ".edad" / "runs").glob("*.json"))
+    log = json.loads(logs[-1].read_text())
+
+    assert log["final_gate"]["passed"] is True

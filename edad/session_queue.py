@@ -25,8 +25,10 @@ T004's decisions are here: D2 the integration branch, D3 fast-forward merges,
 D4 one subprocess per ticket, D5 just-in-time re-approval, D11 where the run
 leaves you. T005's are here too: D1 the queue is a plan computed before
 anything executes, D6 doneness is the evidence record's existence, D12
-re-invoking the same command resumes. T006's (D7, D8, D9, D10) belong to their
-own ticket; a draft is recoverable from commit `1a48d51`.
+re-invoking the same command resumes. T006's (D7, D8, D9, D10) are present as
+signatures only - the block below `# --- T006` is stubs, standing in for work
+that ticket has not done yet, and every one of them returns the wrong answer on
+purpose.
 
 D13 is unenforced: v1 is sequential. `plan_run` computes `Plan.independent`
 and nothing acts on it, so a later scheduler is a change rather than a
@@ -444,6 +446,82 @@ def run_session(root: Path, ticket_id: str) -> int:
     return subprocess.run(session_argv(ticket_id), cwd=root, check=False).returncode
 
 
+# --- T006: D7, D8, D9, D10 - signatures only --------------------------------
+#
+# Deliberately wrong, and here only so `approve` can take a red proof that
+# means something. With the module importable, each frozen test reaches its
+# assertions and fails there - `FAILED <file>::<test>` - rather than dying in
+# collection. An `ERROR` says an import broke, which is true of a test that
+# asserts nothing just as readily, so it proves nothing about the assertions
+# the freeze is meant to hold the agent to.
+#
+# Every return below is a value no acceptance test accepts. That is the point:
+# a stub that happened to satisfy its test would be a passing acceptance
+# command at approve time, which is refused for the same reason.
+
+
+def skip_reason(failed_id: str) -> str:
+    """Names the ticket that caused the skip, so the morning's triage is one
+    line rather than a reconstruction of the dependency graph."""
+    return ""
+
+
+def no_commit_abort(session_log: dict) -> bool:
+    """True when a session log shows a non-promoted outcome and no iteration
+    that made a commit.
+
+    Reads the log `edad.session` already writes - `asdict(SessionLog)`, so
+    `outcome` against `PROMOTED_OUTCOMES` and `iterations[].made_commit`. An
+    agent that exits non-zero and commits nothing is not failing the ticket, it
+    is not running.
+    """
+    return False
+
+
+def breaker_fired(
+    *, no_commit_aborts: int, elapsed_s: float, budget_s: float | None = None
+) -> str | None:
+    """`"no_progress"`, `"wall_clock"`, or `None`. Pure, keyword-only.
+
+    `budget_s=None` means no wall-clock bound. Wall-clock is the bound the
+    operator agreed to when they went to bed; it does not bound the bill, and
+    nothing here does.
+    """
+    return None
+
+
+class RunState:
+    """The fold: what the night has done so far, and whether it may continue.
+
+    `fail(ticket_id, session_log=None)` records the failure and propagates
+    skips to everything transitively reachable from it through `blocked_by` -
+    reachability, not the immediate edge. `skipped` maps a skipped id to its
+    reason, `remaining()` lists what is still to run, and `breaker` stays
+    `None` until one fires.
+
+    `as_log()` returns the run-log payload with `breaker` a **separate key**
+    from `tickets`: a ticket the breaker never reached did not fail, and a log
+    that conflated the two would send the operator to debug a ticket that never
+    ran.
+    """
+
+    def __init__(self, plan: Plan, tickets: dict[str, dict], budget_s: float | None = None):
+        self.plan = plan
+        self.tickets = tickets
+        self.budget_s = budget_s
+        self.skipped: dict[str, str] = {}
+        self.breaker: str | None = None
+
+    def fail(self, ticket_id: str, session_log: dict | None = None) -> None:
+        return None
+
+    def remaining(self) -> list[str]:
+        return []
+
+    def as_log(self) -> dict:
+        return {"tickets": {}, "breaker": None, "final_gate": None}
+
+
 # --- the driver -------------------------------------------------------------
 
 
@@ -491,6 +569,18 @@ def print_summary(
         print(f"  {ticket_id}: {outcome}" + (f", merged {sha[:12]}" if sha else ""))
     print("\nto discard this run entirely:")
     print("  " + discard_command(run_branch, ticket_branches, worktree_paths))
+
+
+def final_gate(root: Path) -> dict:
+    """One full gate on the run branch tip, after the queue drains.
+
+    Redundant by derivation from the fast-forward property - ticket N's gate
+    already ran against every earlier ticket's merged code - and it runs anyway,
+    because this harness holds that a measured claim beats a derived one. If it
+    ever fails while every ticket promoted, the derivation is wrong somewhere;
+    the run log reports it and nothing else is designed.
+    """
+    return {"passed": False, "commands": []}
 
 
 def run_queue(root: Path, ticket_ids: list[str]) -> int:
