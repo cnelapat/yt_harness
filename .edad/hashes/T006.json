@@ -1,8 +1,8 @@
 {
   "tests/test_session_queue.py": "a8b5d00897b3638bfc2fdb9a766159e0df0a74c76614022498c528276991565f",
   "_edad": {
-    "approved_at": "2026-09-09T22:34:15.009907+00:00",
-    "ticket_sha256": "392e76402cb744bdd673966b4767c3b46078ccde6be546e09d05ce13cd677d37",
+    "approved_at": "2026-09-09T22:57:51.087384+00:00",
+    "ticket_sha256": "569779261b0b06cc4e6adf9601bb6f425c974a98a8752453df94ed3404b3d336",
     "decisions": [
       "D7",
       "D8",
@@ -83,8 +83,8 @@
     ],
     "mutation_proof": null,
     "full_gate_baseline": {
-      "taken_at": "2026-09-09T22:34:11.699021+00:00",
-      "commit": "60f37940a8e1e16f483f110f67afa36e442ce85f",
+      "taken_at": "2026-09-09T22:57:47.519714+00:00",
+      "commit": "7afd5e349ca8a867c0b7a89babe6a18b34357ca9",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 1,
