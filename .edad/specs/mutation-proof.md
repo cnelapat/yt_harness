@@ -1,6 +1,8 @@
 ---
 slug: mutation-proof
-grilled: .edad/grills/mutation-proof.md
+grilled:
+  - .edad/grills/mutation-proof.md
+  - .edad/grills/red-proof-teeth.md
 status: draft
 ---
 
@@ -11,13 +13,25 @@ running the acceptance commands before the work exists and requiring them to fai
 it refuses a ticket whose commands already pass — a test that cannot fail proves
 nothing.
 
-That rule is right for greenfield work and wrong for the central brownfield case. A
-characterization test pins the behaviour a refactor must preserve, so it passes on day
-one by construction; passing is what makes it a correct characterization. Today the
+That rule was taken to be right for greenfield work and wrong for the central
+brownfield case. Only the second half holds. A characterization test pins the behaviour
+a refactor must preserve, so it passes on day one by construction; passing is what makes
+it a correct characterization. Today the
 only way past the refusal is `--allow-passing`, which stamps every downstream record
 `no red proof`. So the harness cannot express its most important brownfield ticket
 type without permanently weakening the evidence for it, and an auditor reading such a
 record cannot tell a real characterization test from one that asserts nothing.
+
+The greenfield half does not survive contact with the evidence. Approval refuses only
+when *every* acceptance command passes, so any non-zero exit is accepted as the proof.
+A greenfield ticket's module does not exist at approve time, so its commands fail during
+collection: the test never runs, and no assertion in it is ever executed. What the lock
+records is that an import failed.
+
+Every red proof this repo has taken is that shape — 54 of them across T001-T005, exit
+code 2 where the command names a file and 4 where it names a node id, and exit code 1
+nowhere at all. So the frozen tests guarding this harness, including the ones guarding
+the gate itself, have never been shown to have teeth.
 
 Weakening the bar is not available either. A green proof is strictly weaker than a red
 one: passed-at-base, passed-at-HEAD and diff-confined-to-scope are all satisfied by a
@@ -40,6 +54,15 @@ concession to it: green against the code it characterizes, **and** dead in the p
 the author named, under every mutation they declared. Approve then records the shape
 of that proof in the lock, and the report says which of three tiers a record carries —
 red proof, mutation proof, or neither — so no reader has to infer it.
+
+The same rule then applies to the tier that was exempted from it. A red proof must also
+produce a `FAILED` naming a node id in a frozen file, and every pytest acceptance
+command must produce its own. In practice the author lands importable signature stubs
+before approve, which turns the greenfield shape from `ERROR <file>` into `FAILED
+<file>::<test>`; a test that asserts nothing then passes instead, and the existing
+refusal catches it. That is weaker than the mutation proof — it shows the test reaches
+the code under contract, not that it asserts on what it reached — and stronger than an
+exit code, which the paragraph above already says cannot tell those two apart.
 
 ## User stories
 
@@ -73,10 +96,21 @@ red proof, mutation proof, or neither — so no reader has to infer it.
     like four caught by four.
 13. As an auditor, I want the lock to hold each mutation's command, touched paths,
     expectations and detectors, so that the proof can be re-read without re-running it.
+14. As a ticket author on a greenfield ticket, I want approve to refuse a red proof that
+    is only a collection error, so that a test which never runs cannot become the
+    contract.
+15. As a ticket author, I want approve to name the acceptance commands that produced no
+    `FAILED` of their own, so that I learn which frozen test is still unproven rather
+    than only that one of them is.
+16. As a ticket author whose acceptance set is entirely non-pytest, I want approve to say
+    so plainly, so that I am not handed a red proof resting on an exit code.
+17. As an auditor, I want a lock taken before this amendment to read as an import-only
+    proof whose teeth were never verified, so that pre-amendment evidence is not mistaken
+    for evidence under the current bar.
 
 ## Seams
 
-Two new seams, both in `edad/gate.py`, and two existing ones. Two rather than one
+Two new seams, both in `edad/gate.py`, and three existing ones. Two rather than one
 because the detection rules and the approve-time orchestration have very different
 test costs: keeping detection pure means D5 and D6 cost six string-in/ids-out tests
 instead of six full mutation runs, and that is what keeps the ticket finishable inside
@@ -115,14 +149,29 @@ instead of six full mutation runs, and that is what keeps the ticket finishable 
   the detected set; and that a partial intersection is not enough.
 - **Discharges**: D5, D6.
 
+**`red-proof-gate`**
+
+- **Where**: `prove_red_or_die`, the existing approve-time refusal for ordinary tickets,
+  together with the pure detection it calls.
+- **Exists**: yes — and untested. It is referenced once in the suite, only to be
+  monkeypatched out, so the function this amendment tightens has no coverage of its own
+  today. D15 and D16 bring its first tests.
+- **Observes**: that a red proof consisting only of `ERROR` is refused; that a `FAILED`
+  at a node id in a frozen file supplies the proof; that a `FAILED` outside the frozen
+  files does not; that a pytest command producing no `FAILED` of its own refuses and is
+  named; that a non-pytest command counts toward redness but cannot supply detection;
+  and that an acceptance set containing no pytest command at all is refused.
+- **Discharges**: D15, D16.
+
 **`approval-lock`**
 
 - **Where**: the `_edad` block written into `.edad/hashes/<id>.json`.
 - **Exists**: yes.
 - **Observes**: that `mutation_proof` carries the approve-time commit, the green-at-base
   results, and per mutation its command, touched paths, `expects`, acceptance command
-  and `detected_by`; and that `red_proof` stays null for a characterization ticket.
-- **Discharges**: D10.
+  and `detected_by`; and that `red_proof` stays null for a characterization ticket;
+  and that each `red_proof` entry carries the node ids its command reported FAILED.
+- **Discharges**: D10, D17.
 
 **`record-and-report`**
 
@@ -130,15 +179,26 @@ instead of six full mutation runs, and that is what keeps the ticket finishable 
 - **Exists**: yes, though `report()` has no test today — D11 brings the first ones, and
   they read stdout.
 - **Observes**: that the record carries `mutation_proof`; that the report names the
-  tier; and that it prints the mutation count and the distinct-detector count.
-- **Discharges**: D11.
+  tier; that it prints the mutation count and the distinct-detector count; that the
+  record carries the red proof's `detected_by`; and that a lock lacking that field is
+  named as a pre-amendment import-only proof.
+- **Discharges**: D11, D20.
+
+**`detection-functions` is reused unchanged.** D15's matching rule is
+`detected_node_ids` exactly as D5 specified it — same function, same frozen-file
+membership test — so the red tier adds no detection tests and no new ticket field. That
+reuse is why this amendment costs four decisions with commands rather than a parallel
+mechanism.
 
 **Decisions with no seam.** D13 and D14 carry `unenforced:` rather than `verify:`, so
 neither has an acceptance command by construction and neither takes a seam. D13's
 `## Widened scope` disclosure rule was applied as `to-tickets` guidance and is already
 present in `.claude/skills/to-tickets/SKILL.md`; nothing further is owed on it. D14 is a
 negative scope decision — there is no promotion-time behaviour to observe, only its
-absence. Every decision carrying `verify:` has a seam.
+absence. D18 and D19 join them for the same kind of reason: the gate cannot tell a
+signature stub from a near-complete implementation, because both are a diff inside
+`scope`; and D19 asserts only that no migration step exists, which is again an absence.
+Every decision carrying `verify:` has a seam.
 
 ## Implementation decisions
 
@@ -205,6 +265,30 @@ span the behaviour the test claims to pin, so two trivial mutations caught by th
 assertion satisfy every rule here. The mitigation is disclosure, not enforcement — a
 narrow proof still passes, it just cannot look wide.
 
+**The red tier** changes by one rule and one field. Approval keeps its existing refusal
+— acceptance commands that already pass prove nothing — and gains a second: each pytest
+acceptance command must report a `FAILED` at a node id inside one of the ticket's frozen
+files. Non-pytest commands still run and still count toward the suite being red, but
+cannot supply that evidence, and a ticket with no pytest command able to supply it is
+refused rather than exempted. The matcher is the detection function unchanged, so
+nothing is added to the ticket format: the red tier has no perturbation to attribute, so
+frozen-file membership is the whole rule where the mutation tier needs `expects`.
+
+The field is `detected_by` on each red-proof entry, the same name the mutation proof
+already uses. It exists so the report can read a stored result rather than re-derive
+one: a lock without the field is shown as a pre-amendment import-only proof on the
+strength of its absence, never inferred from an exit code. The five existing locks keep
+what they recorded, because they are hash-anchored evidence of what was actually run and
+editing them to look compliant destroys the property that makes them worth having.
+
+What the red tier still does not establish is that the frozen test asserts on what it
+reached. A test that calls a stub raising `NotImplementedError` and asserts nothing
+produces `FAILED` all the same. The mutation tier would close that, and D2 puts it out
+of reach at approve time for greenfield, because a module that does not yet exist cannot
+be green at base. The boundary between a signature stub and a near-complete
+implementation is unpoliced for the same kind of reason D13 is: both are a diff inside
+`scope`, and the gate cannot read intent.
+
 ## Out of scope
 
 - **Generated mutation operators.** They would guarantee non-vacuity *and* a coverage
@@ -224,6 +308,17 @@ narrow proof still passes, it just cannot look wide.
   allow-list, so a path added for editing and a path added for perturbing are
   indistinguishable to the matcher, and enforcing it would mean parsing prose. Owned by
   `to-tickets` guidance, already landed.
+- **Migrating the existing locks.** D19. T001-T005 keep the red proofs they recorded and
+  the new bar binds new approvals only. Re-taking those proofs is unavailable in any
+  case: the code now exists, so the commands come back green and the existing refusal
+  catches them.
+- **Policing the pre-approve stub.** D18, unenforced: a signature skeleton and a
+  near-complete implementation are both a diff inside `scope`, and a line-count or AST
+  bound blocks a dataclass or a constant table while a determined author routes around
+  it.
+- **Proving a red-tier test asserts rather than merely reaches.** Needs the mutation
+  tier, which D2 makes unavailable at approve time for greenfield. Deferred below rather
+  than solved here.
 
 ## Further notes
 
@@ -247,6 +342,12 @@ requires such a ticket; it is a `to-tickets` question.
   hash catches this less legibly. Cosmetic until a rename actually happens.
 - Characterization is unavailable to non-pytest suites (D8). This repo is pytest-only;
   revisit when a second runner exists.
+- T001-T005's frozen tests remain unverified for teeth, and D19 leaves them that way.
+  Their modules now exist and are green at base, which makes them eligible for the
+  mutation tier — this harness's own guard tests characterized by the mechanism it
+  ships. Five tickets of mutation authoring, deliberately not blocking this amendment.
+- The red tier proves a frozen test reaches the code under contract, not that it asserts
+  on what it reached. The price of D2, and the neighbour of D18.
 
 **Not settled and not touched here**: findings #7 (multi-ticket controller) and #8
 (docker `--internal` network tier) from the same brownfield review, and whether
@@ -254,7 +355,8 @@ requires such a ticket; it is a `to-tickets` question.
 
 ## Decisions
 
-Carried from `.edad/grills/mutation-proof.md` verbatim — copied, not retyped, and
+Carried from `.edad/grills/mutation-proof.md` (D1-D14) and
+`.edad/grills/red-proof-teeth.md` (D15-D20) verbatim — copied, not retyped, and
 verified byte-identical apart from the `seam:` line added to each entry.
 
 ```yaml
@@ -406,9 +508,71 @@ decisions:
       - edad/gate.py
     seam: none
     rejected: "re-running mutations at promotion (recording uncomparable, or requiring detection) — the mutation is written against pre-refactor text, so it would abstain almost every time, and requiring detection would block a legitimate refactor that renames the mutated symbol"
+  - id: D15
+    decision: "The red proof requires teeth, not merely redness: every pytest acceptance command must produce a pytest `FAILED` naming a node id in one of the ticket's frozen files. `ERROR` is never sufficient. Reuses `detected_node_ids` unchanged; no new ticket field."
+    verify:
+      - python3 -m pytest tests/test_gate_red_proof.py::test_error_only_red_proof_refuses_approval -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_failed_at_a_frozen_node_id_is_a_red_proof -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_failed_outside_the_frozen_files_does_not_supply_the_red_proof -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_a_command_without_its_own_failed_refuses_and_names_it -q
+    frozen:
+      - tests/test_gate_red_proof.py
+    scope:
+      - edad/gate.py
+    seam: red-proof-gate
+    rejected: "requiring the FAILED from only one command in the acceptance set — on T005's 12 commands that proves one test has teeth and leaves 11 unexamined, the same shape D6 rejected for `expects` and D7 rejected for survivors, for the same reason: unverified claims sitting in the lock beside verified ones"
+  - id: D16
+    decision: "Non-pytest acceptance commands still run and still count toward redness, but cannot supply the red proof's detection. A ticket whose acceptance set contains no pytest command able to supply it is refused, and approve says so. D8's rule, applied to the red tier."
+    verify:
+      - python3 -m pytest tests/test_gate_red_proof.py::test_non_pytest_command_cannot_supply_the_red_proof -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_acceptance_set_with_no_pytest_command_refuses -q
+    frozen:
+      - tests/test_gate_red_proof.py
+    scope:
+      - edad/gate.py
+    seam: red-proof-gate
+    rejected: "exempting a ticket that declares no pytest command — every ticket in this repo pairs its pytest commands with `ruff check .`, and an exemption keyed on the absence of a pytest command is the vacuous case the decision exists to catch, wearing a waiver"
+  - id: D17
+    decision: "`red_proof` entries gain `detected_by`: the node ids each command reported FAILED inside a frozen file, the same field the mutation proof stores."
+    verify:
+      - python3 -m pytest tests/test_gate_red_proof.py::test_lock_records_detected_by_for_each_red_proof_command -q
+    frozen:
+      - tests/test_gate_red_proof.py
+    scope:
+      - edad/gate.py
+    seam: approval-lock
+    rejected: "a bare {command, exit_code} shape — `gate.py` already rejects that shape for `mutation_proof` on the grounds that it loses the FAILED/ERROR distinction the whole design rests on, and the red proof needs the richness for the same reason"
+  - id: D18
+    decision: "The boundary between a signature stub and a near-complete implementation landed before approve is not policed."
+    unenforced: "The gate cannot distinguish them: both are a diff inside `scope`, and an AST or line-count bound is a proxy that blocks a dataclass or a constant table while a determined author routes around it. Partly self-limiting — land enough implementation and the acceptance commands go green, which the existing bar already refuses — but an author who lands most of the implementation and leaves one bug gets a genuine FAILED at a frozen node id that proves less than it appears to. Recorded so a later session reads this as a priced cost rather than an oversight."
+    scope:
+      - edad/gate.py
+    seam: none
+    rejected: "requiring the stub in its own commit — it makes the boundary eyeballable in history, but 'its own commit' is itself unenforceable by the gate, so it buys guidance at the cost of a rule that reads as enforced and is not"
+  - id: D19
+    decision: "The new bar binds new approvals only. Existing locks are not rewritten, and T001-T005 keep the red proofs they recorded."
+    unenforced: "A negative scope decision — approve writes only the lock for the ticket being approved, so there is no behaviour to assert, only the absence of a migration step. Testing it would mean asserting that something does not happen, which passes for the wrong reasons. The one readable half, an old-shape lock displayed honestly, is D20's."
+    scope:
+      - edad/gate.py
+    seam: none
+    rejected: "re-recording the existing red proofs in the new shape — the locks are hash-anchored evidence of what was actually run, and editing them to look compliant destroys the property that makes them worth having. Re-taking the proofs is unavailable in any case: the code now exists, so the commands come back green and the existing bar refuses them"
+  - id: D20
+    decision: "`report()` reads the stored `detected_by`, and displays a lock that lacks the field as a pre-amendment import-only proof whose teeth were never verified, on the strength of the field being absent."
+    verify:
+      - python3 -m pytest tests/test_gate_red_proof.py::test_record_carries_red_proof_detected_by -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_report_names_a_pre_amendment_red_proof_when_detected_by_is_absent -q
+    frozen:
+      - tests/test_gate_red_proof.py
+    scope:
+      - edad/gate.py
+    seam: record-and-report
+    rejected: "inferring the tier from `exit_code` — it would classify the five existing locks for free, but invents a claim the run never recorded, and is exactly the re-derivation from a parsed copy that the verifier-reads-the-primary-artifact rule exists to prevent"
 deferred:
   - "Coverage is not measured and cannot be, given author-chosen mutations. Disclosed via report()'s shape line (D11) rather than enforced. Revisit only alongside generated mutations."
   - "Nothing verifies the characterization test still has teeth against the refactored code. Follows from D14 and is the price of it."
   - "`expects` and `detected_by` node ids go stale on a test rename; the frozen hash catches this less legibly. Cosmetic until a rename actually happens."
   - "Characterization is unavailable to non-pytest suites (D8). This repo is pytest-only; revisit when a second runner exists."
+  - "T001-T005's frozen tests remain unverified for teeth. Their modules now exist and are green at base, which makes them eligible for the mutation tier — the brownfield proof applied to this harness's own guard tests. Five tickets of mutation authoring; deliberately not blocking this amendment. Owner: user."
+  - "The bar proves a frozen test reaches the code under contract, not that it asserts on what it reached. A test that calls a NotImplementedError stub and asserts nothing still produces FAILED. Closing this needs the mutation tier, which D2 makes unavailable at approve time for greenfield."
+  - "D18's stub boundary is unenforced by construction."
 ```
