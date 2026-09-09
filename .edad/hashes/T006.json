@@ -1,0 +1,111 @@
+{
+  "tests/test_session_queue.py": "a8b5d00897b3638bfc2fdb9a766159e0df0a74c76614022498c528276991565f",
+  "_edad": {
+    "approved_at": "2026-09-09T22:34:15.009907+00:00",
+    "ticket_sha256": "392e76402cb744bdd673966b4767c3b46078ccde6be546e09d05ce13cd677d37",
+    "decisions": [
+      "D7",
+      "D8",
+      "D9",
+      "D10"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_failed_ticket_skips_its_transitive_dependents -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_failed_ticket_skips_its_transitive_dependents"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_independent_tickets_continue_after_a_failure -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_independent_tickets_continue_after_a_failure"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_skip_reason_names_the_failed_ticket -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_skip_reason_names_the_failed_ticket"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_two_consecutive_no_commit_aborts_stop_the_queue -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_two_consecutive_no_commit_aborts_stop_the_queue"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_wall_clock_budget_stops_the_queue -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_wall_clock_budget_stops_the_queue"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_breaker_firing_is_recorded_distinctly_from_a_ticket_failure -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_breaker_firing_is_recorded_distinctly_from_a_ticket_failure"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_run_log_records_outcome_and_merge_sha_per_ticket -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_run_log_records_outcome_and_merge_sha_per_ticket"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_run_log_is_gitignored_telemetry -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_run_log_is_gitignored_telemetry"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_final_full_gate_runs_on_the_run_branch_tip -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_final_full_gate_runs_on_the_run_branch_tip"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_final_gate_result_is_in_the_run_log -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_final_gate_result_is_in_the_run_log"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-09T22:34:11.699021+00:00",
+      "commit": "60f37940a8e1e16f483f110f67afa36e442ce85f",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_session_queue.py::test_failed_ticket_skips_its_transitive_dependents": 1,
+            "pytest:tests/test_session_queue.py::test_independent_tickets_continue_after_a_failure": 1,
+            "pytest:tests/test_session_queue.py::test_skip_reason_names_the_failed_ticket": 1,
+            "pytest:tests/test_session_queue.py::test_two_consecutive_no_commit_aborts_stop_the_queue": 1,
+            "pytest:tests/test_session_queue.py::test_wall_clock_budget_stops_the_queue": 1,
+            "pytest:tests/test_session_queue.py::test_breaker_firing_is_recorded_distinctly_from_a_ticket_failure": 1,
+            "pytest:tests/test_session_queue.py::test_run_log_records_outcome_and_merge_sha_per_ticket": 1,
+            "pytest:tests/test_session_queue.py::test_run_log_is_gitignored_telemetry": 1,
+            "pytest:tests/test_session_queue.py::test_final_full_gate_runs_on_the_run_branch_tip": 1,
+            "pytest:tests/test_session_queue.py::test_final_gate_result_is_in_the_run_log": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
