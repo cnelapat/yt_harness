@@ -59,10 +59,14 @@ The same rule then applies to the tier that was exempted from it. A red proof mu
 produce a `FAILED` naming a node id in a frozen file, and every pytest acceptance
 command must produce its own. In practice the author lands importable signature stubs
 before approve, which turns the greenfield shape from `ERROR <file>` into `FAILED
-<file>::<test>`; a test that asserts nothing then passes instead, and the existing
-refusal catches it. That is weaker than the mutation proof — it shows the test reaches
-the code under contract, not that it asserts on what it reached — and stronger than an
-exit code, which the paragraph above already says cannot tell those two apart.
+<file>::<test>`.
+
+**What the stub returns decides how much that proves** (D21). A stub raising
+`NotImplementedError` fails every frozen test alike, including one that asserts nothing,
+so it flattens the distinction the bar exists to see. A stub returning a type-correct
+wrong value lets the vacuous test pass instead — and the per-command rule above then
+refuses it by name. The residue is assertion *strength*, which D11's coverage gap
+already owns and only mutation closes.
 
 ## User stories
 
@@ -107,6 +111,12 @@ exit code, which the paragraph above already says cannot tell those two apart.
 17. As an auditor, I want a lock taken before this amendment to read as an import-only
     proof whose teeth were never verified, so that pre-amendment evidence is not mistaken
     for evidence under the current bar.
+18. As a ticket author on a greenfield ticket, I want the stub convention to be one that
+    lets a vacuous test go green, so that the bar I am approved against separates a test
+    that asserts from one that merely reaches.
+19. As a ticket author, I want a whole-file pytest acceptance command refused, so that a
+    vacuous test sitting beside an asserting one in the same file cannot ride through
+    unexamined.
 
 ## Seams
 
@@ -160,8 +170,9 @@ instead of six full mutation runs, and that is what keeps the ticket finishable 
   at a node id in a frozen file supplies the proof; that a `FAILED` outside the frozen
   files does not; that a pytest command producing no `FAILED` of its own refuses and is
   named; that a non-pytest command counts toward redness but cannot supply detection;
-  and that an acceptance set containing no pytest command at all is refused.
-- **Discharges**: D15, D16.
+  and that an acceptance set containing no pytest command at all is refused; and that a
+  pytest command naming a whole file rather than a node id is refused.
+- **Discharges**: D15, D16, D22.
 
 **`approval-lock`**
 
@@ -198,6 +209,10 @@ negative scope decision — there is no promotion-time behaviour to observe, onl
 absence. D18 and D19 join them for the same kind of reason: the gate cannot tell a
 signature stub from a near-complete implementation, because both are a diff inside
 `scope`; and D19 asserts only that no migration step exists, which is again an absence.
+D21 joins them too, and its reason is the sharpest of the four: the one mechanical signal
+that would separate a raising stub from a returning one is pytest's `FAILED <node> -
+<reason>` suffix, and pytest drops that suffix when the node id is long relative to the
+terminal width — so the rule would decide the same ticket differently on two machines.
 Every decision carrying `verify:` has a seam.
 
 ## Implementation decisions
@@ -281,13 +296,20 @@ strength of its absence, never inferred from an exit code. The five existing loc
 what they recorded, because they are hash-anchored evidence of what was actually run and
 editing them to look compliant destroys the property that makes them worth having.
 
-What the red tier still does not establish is that the frozen test asserts on what it
-reached. A test that calls a stub raising `NotImplementedError` and asserts nothing
-produces `FAILED` all the same. The mutation tier would close that, and D2 puts it out
-of reach at approve time for greenfield, because a module that does not yet exist cannot
-be green at base. The boundary between a signature stub and a near-complete
-implementation is unpoliced for the same kind of reason D13 is: both are a diff inside
-`scope`, and the gate cannot read intent.
+What the red tier establishes about *asserting*, rather than merely reaching, is decided
+by the stub and not by the rule (D21). Against a raising stub a test that asserts nothing
+produces `FAILED` all the same; against a stub returning a wrong value it passes, and the
+per-command rule refuses it. So the convention is load-bearing and the gate cannot check
+it: the only mechanical signal is pytest's `FAILED <node> - <reason>` suffix, which pytest
+drops when the node id is long relative to the terminal width. Guidance, not a rule.
+
+What no stub choice fixes is a whole-file acceptance command, which reports `FAILED` for
+the tests that assert and stays silent about the vacuous ones beside them — satisfying the
+per-command rule while leaving them unexamined. That one is checkable, and D22 checks it.
+
+The boundary between a signature stub and a near-complete implementation stays unpoliced
+for the same kind of reason D13 is: both are a diff inside `scope`, and the gate cannot
+read intent.
 
 ## Out of scope
 
@@ -316,9 +338,10 @@ implementation is unpoliced for the same kind of reason D13 is: both are a diff 
   near-complete implementation are both a diff inside `scope`, and a line-count or AST
   bound blocks a dataclass or a constant table while a determined author routes around
   it.
-- **Proving a red-tier test asserts rather than merely reaches.** Needs the mutation
-  tier, which D2 makes unavailable at approve time for greenfield. Deferred below rather
-  than solved here.
+- **Measuring how strong a red-tier test's assertion is.** That one assertion fired is
+  what D15 plus D21's stub convention establish; that it was a demanding assertion is
+  D11's coverage gap, and only mutation closes it. Whether the test asserts at all is no
+  longer deferred — see D21.
 
 ## Further notes
 
@@ -346,8 +369,10 @@ requires such a ticket; it is a `to-tickets` question.
   Their modules now exist and are green at base, which makes them eligible for the
   mutation tier — this harness's own guard tests characterized by the mechanism it
   ships. Five tickets of mutation authoring, deliberately not blocking this amendment.
-- The red tier proves a frozen test reaches the code under contract, not that it asserts
-  on what it reached. The price of D2, and the neighbour of D18.
+- ~~The red tier proves a frozen test reaches the code under contract, not that it
+  asserts on what it reached.~~ **Superseded by D21**, measured against the shipped gate:
+  it needed the stub to return a wrong value rather than raise, not the mutation tier.
+  What remains deferred is assertion *strength*, which is D11's gap.
 
 **Not settled and not touched here**: findings #7 (multi-ticket controller) and #8
 (docker `--internal` network tier) from the same brownfield review, and whether
@@ -356,7 +381,7 @@ requires such a ticket; it is a `to-tickets` question.
 ## Decisions
 
 Carried from `.edad/grills/mutation-proof.md` (D1-D14) and
-`.edad/grills/red-proof-teeth.md` (D15-D20) verbatim — copied, not retyped, and
+`.edad/grills/red-proof-teeth.md` (D15-D22) verbatim — copied, not retyped, and
 verified byte-identical apart from the `seam:` line added to each entry.
 
 ```yaml
@@ -567,6 +592,24 @@ decisions:
       - edad/gate.py
     seam: record-and-report
     rejected: "inferring the tier from `exit_code` — it would classify the five existing locks for free, but invents a claim the run never recorded, and is exactly the re-derivation from a parsed copy that the verifier-reads-the-primary-artifact rule exists to prevent"
+  - id: D21
+    decision: "The pre-approve stub returns a type-correct wrong value rather than raising `NotImplementedError`. A raising stub fails every frozen test alike, including one that asserts nothing; a returning stub lets a vacuous test pass, which D15's per-command bar then refuses by name."
+    unenforced: "The gate cannot tell the two apart from what it reads. The only mechanical signal is pytest's `FAILED <node> - <reason>` suffix, and pytest DROPS that suffix when the node id is long relative to the terminal width - measured, not assumed: this repo's own test names lose it at the default width and recover it under COLUMNS=200. A rule keyed on it would pass or fail depending on the environment the gate happened to run in, which is worse than guidance that is honest about being guidance. Applied instead as `to-tickets` guidance, in the same commit as this record. D18's neighbour and the same kind of cost."
+    scope:
+      - .claude/skills/to-tickets/SKILL.md
+    seam: none
+    rejected: "requiring the FAILED reason to be something other than NotImplementedError - it reads as the obvious enforcement, and is silently width-dependent, so it would certify or refuse the same ticket differently on two machines"
+  - id: D22
+    decision: "Every pytest acceptance command must name a node id. A whole-file command reports FAILED for the tests in it that assert and stays silent about the vacuous ones beside them, so it satisfies D15 while leaving them unexamined."
+    verify:
+      - python3 -m pytest tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender -q
+    frozen:
+      - tests/test_gate_red_proof.py
+    scope:
+      - edad/gate.py
+    seam: red-proof-gate
+    rejected: "collecting the frozen file's tests and requiring every one to appear in detected_by - it admits whole-file commands, and buys that with a second pytest subprocess at approve time and a new failure mode when collection itself errors. Node-id scoping is what T003 through T007 already do."
 deferred:
   - "Coverage is not measured and cannot be, given author-chosen mutations. Disclosed via report()'s shape line (D11) rather than enforced. Revisit only alongside generated mutations."
   - "Nothing verifies the characterization test still has teeth against the refactored code. Follows from D14 and is the price of it."

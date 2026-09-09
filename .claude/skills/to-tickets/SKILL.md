@@ -78,6 +78,42 @@ writes for that ticket. That is what turns "the test passes" into "a test proven
 capable of failing, for decisions D1 and D3, now passes" — the claim an auditor asks
 for and the one a bare green record cannot make.
 
+**A red proof must have teeth, not merely be red.** Each pytest acceptance command has
+to report a `FAILED` at a node id inside one of the ticket's frozen files. `ERROR` is
+never enough: a greenfield ticket's module does not exist yet, so its commands fail
+during collection, the test never runs, and what the lock would record is that an import
+failed. Two things follow for how you write a ticket.
+
+**Land importable stubs in `scope` before approve, and make them RETURN a wrong value
+rather than raise.** This is the whole difference between a proof that the test asserts
+and a proof that it merely reaches the code:
+
+    def order(ids):              # NO: every frozen test fails alike,
+        raise NotImplementedError    #     including one that asserts nothing
+
+    def order(ids):              # YES: the right type, the wrong answer
+        return []
+
+Against a raising stub, a test asserting nothing still fails on the propagating
+exception and is recorded as proven. Against a returning stub it passes instead — and
+the per-command rule then refuses it by name, telling you which frozen test is empty.
+Pick a value that is the right type and the wrong answer: `[]`, `0`, `None`, a
+zero-valued dataclass. If the ticket's own test happens to expect that value, the test
+goes green and approve refuses, which is the safe direction and tells you to pick
+another.
+
+The gate cannot check this and does not try. Its only signal would be pytest's `FAILED
+<node> - <reason>` suffix, which pytest drops when the node id is long relative to the
+terminal width — so a rule keyed on it would decide the same ticket differently on two
+machines. It is guidance, and it is load-bearing.
+
+**Name a node id in every pytest acceptance command.** `python3 -m pytest
+tests/test_x.py::test_one -q`, never `python3 -m pytest tests/test_x.py -q`. A
+whole-file command reports `FAILED` for the tests in it that assert and stays silent
+about the vacuous ones beside them, so it clears the bar while leaving them unexamined.
+One line per behaviour also makes the acceptance list a census of what the ticket
+actually claims.
+
 Approve also refuses when its own toolchain does not match `requirements-gate.txt`: a
 missing pytest fails for the wrong reason, and that reads as red. Fix the pins rather
 than working around the refusal.

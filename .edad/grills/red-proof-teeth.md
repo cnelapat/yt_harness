@@ -4,6 +4,10 @@ Grilled 2026-09-09. Branch `main` @ `b9c77e7`.
 Amended 2026-09-09 at the to-spec seam checkpoint: the enforced decisions were
 missing `verify:` and `frozen:`, D17 spanned two seams and was split (D20 added,
 nothing renumbered), and D19 was settled as unenforced.
+Amended again 2026-09-09 after T007 merged, from measurements taken against the
+shipped gate: the stub this record specified is what creates the gap this record
+calls unavoidable, and a whole-file acceptance command satisfies D15 while leaving
+vacuous tests beside it unexamined. D21 and D22 added; nothing renumbered.
 Origin: written while handing off T005; the handoff's own framing of the gap was
 wrong twice and is corrected below. Amends `.edad/grills/mutation-proof.md`
 (2026-09-07) and the spec derived from it; supersedes that record's claim that the
@@ -64,16 +68,31 @@ red tier reuses it verbatim. The mutation tier needs `expects` because it must p
 *which* test catches a given perturbation; the red tier has no perturbation to
 attribute, so frozen-file membership is the whole rule.
 
-In practice the author lands importable signature stubs in `scope` before approve. A
-stub raising `NotImplementedError` turns the greenfield shape from `ERROR <file>` into
-`FAILED <file>::<test> - NotImplementedError` — a real FAILED at the exact frozen node
-id. A test that asserts nothing then goes green instead, and the existing bar refuses
-it. Both halves were confirmed against pytest.
+In practice the author lands importable signature stubs in `scope` before approve, which
+turns the greenfield shape from `ERROR <file>` into a real FAILED at the exact frozen
+node id.
 
-The bar proves the test *reaches* the code under contract. It does not prove the test
-asserts on what it reached: a test that calls the stub and asserts nothing still fails
-on the propagating `NotImplementedError`. That is weaker than the mutation proof and
-stronger than what exists, and the gap is stated rather than left to be discovered.
+**What the stub does there is load-bearing, and the first version of this record got it
+wrong.** It specified a stub raising `NotImplementedError` and then claimed, two
+paragraphs apart, both that a test asserting nothing "goes green instead, and the
+existing bar refuses it" and that such a test "still fails on the propagating
+`NotImplementedError`". Those cannot both hold. Measured against the shipped gate, which
+one holds depends entirely on the stub:
+
+    raise NotImplementedError   asserting: FAILED   vacuous: FAILED    -> approved
+    return <type-correct wrong> asserting: FAILED   vacuous: passes    -> REFUSED,
+                                                                          naming it
+
+A raising stub fails every frozen test alike, so it flattens the exact distinction the
+bar exists to see. A returning stub lets the vacuous test go green, and D15's
+per-command rule then refuses it by name — no new machinery, no mutation tier. So the
+"reaches, not asserts" gap this record treats as the price of D2 is not a property of
+the rule at all. It is a property of the stub the record recommended.
+
+The residue is real but much smaller: the bar still does not measure how *strong* an
+assertion is. `assert result is not None` against a stub returning `None` fails and
+proves nearly nothing. That is D11's coverage gap, unchanged, and only mutation closes
+it.
 
 ## Decisions
 
@@ -132,9 +151,26 @@ decisions:
     scope:
       - edad/gate.py
     rejected: "inferring the tier from `exit_code` — it would classify the five existing locks for free, but invents a claim the run never recorded, and is exactly the re-derivation from a parsed copy that the verifier-reads-the-primary-artifact rule exists to prevent"
+  - id: D21
+    decision: "The pre-approve stub returns a type-correct wrong value rather than raising `NotImplementedError`. A raising stub fails every frozen test alike, including one that asserts nothing; a returning stub lets a vacuous test pass, which D15's per-command bar then refuses by name."
+    unenforced: "The gate cannot tell the two apart from what it reads. The only mechanical signal is pytest's `FAILED <node> - <reason>` suffix, and pytest DROPS that suffix when the node id is long relative to the terminal width - measured, not assumed: this repo's own test names lose it at the default width and recover it under COLUMNS=200. A rule keyed on it would pass or fail depending on the environment the gate happened to run in, which is worse than guidance that is honest about being guidance. Applied instead as `to-tickets` guidance, in the same commit as this record. D18's neighbour and the same kind of cost."
+    scope:
+      - .claude/skills/to-tickets/SKILL.md
+    rejected: "requiring the FAILED reason to be something other than NotImplementedError - it reads as the obvious enforcement, and is silently width-dependent, so it would certify or refuse the same ticket differently on two machines"
+  - id: D22
+    decision: "Every pytest acceptance command must name a node id. A whole-file command reports FAILED for the tests in it that assert and stays silent about the vacuous ones beside them, so it satisfies D15 while leaving them unexamined."
+    verify:
+      - python3 -m pytest tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses -q
+      - python3 -m pytest tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender -q
+    frozen:
+      - tests/test_gate_red_proof.py
+    scope:
+      - edad/gate.py
+    rejected: "collecting the frozen file's tests and requiring every one to appear in detected_by - it admits whole-file commands, and buys that with a second pytest subprocess at approve time and a new failure mode when collection itself errors. Node-id scoping is what T003 through T007 already do."
 deferred:
   - "T001-T005's frozen tests remain unverified for teeth. Their modules now exist and are green at base, which makes them eligible for the mutation tier — the brownfield proof applied to this harness's own guard tests. Five tickets of mutation authoring; deliberately not blocking this amendment. Owner: user."
-  - "The bar proves a frozen test reaches the code under contract, not that it asserts on what it reached. A test that calls a NotImplementedError stub and asserts nothing still produces FAILED. Closing this needs the mutation tier, which D2 makes unavailable at approve time for greenfield."
+  - "SUPERSEDED by D21. This read: the bar proves a frozen test reaches the code under contract, not that it asserts on what it reached, and closing it needs the mutation tier. Measured against the shipped gate that is false - it needed the stub to return a wrong value instead of raising, at which point D15's existing per-command rule refuses the vacuous test by name. Kept rather than deleted because the spec and T007 were both written from it."
+  - "Assertion STRENGTH is still not measured. A weak assertion that happens to fail against the stub is approved on the same evidence as a strong one. That is D11's coverage gap, and only mutation closes it."
   - "D18's stub boundary is unenforced by construction."
 ```
 
