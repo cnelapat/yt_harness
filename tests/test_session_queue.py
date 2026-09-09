@@ -19,7 +19,7 @@ moment the module appears that single key becomes thirty node ids the ratchet
 has never seen. Authoring per ticket keeps each `full_gate` winnable, and costs
 nothing, because the locks are used in sequence rather than concurrently.
 
-T004's decisions are here. T005's (D1, D6, D12) and T006's (D7, D8, D9, D10)
+T004's decisions are here, and T005's (D1, D6, D12). T006's (D7, D8, D9, D10)
 were drafted against this same design and are recoverable in full from commit
 `1a48d51`; re-author them from there when their ticket comes up.
 
@@ -34,6 +34,7 @@ here and the agent is not.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +42,17 @@ from pathlib import Path
 import pytest
 
 from edad import session_queue as sq
-from edad.session_queue import Refusal, discard_command, outcome_of, session_argv
+from edad.session_queue import (
+    Refusal,
+    discard_command,
+    evidence_path,
+    field_display,
+    is_done,
+    outcome_of,
+    plan_run,
+    session_argv,
+    verdict,
+)
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -54,6 +65,14 @@ def _git(root: Path, *args: str) -> str:
 
 def ticket(tid: str, blocked_by: tuple[str, ...] = ()) -> dict:
     return {"id": tid, "blocked_by": list(blocked_by), "frozen": [], "scope": []}
+
+
+def tickets(*pairs: tuple[str, tuple[str, ...]]) -> dict[str, dict]:
+    return {tid: ticket(tid, blocks) for tid, blocks in pairs}
+
+
+# A chain and a bystander: T2 gates T3, and T4 depends on nothing.
+CHAIN = tickets(("T1", ()), ("T2", ("T1",)), ("T3", ("T2",)), ("T4", ()))
 
 
 @pytest.fixture
@@ -410,3 +429,119 @@ def test_discard_command_names_only_what_the_run_created(monkeypatch, repo, caps
 
     assert proc.returncode == 0, command + "\n" + proc.stdout + proc.stderr
     assert _git(repo, "branch", "--format=%(refname:short)").split() == ["main"]
+
+
+# --- D1: the queue is a plan, made before anything runs ---------------------
+
+
+def test_queue_is_topologically_sorted_by_blocked_by():
+    """Ordering comes from the tickets' own `blocked_by`, not from argument
+    order and not from a run manifest - a manifest would put ordering in a
+    second place beside `blocked_by`, where the two can disagree."""
+    plan = plan_run(CHAIN, ["T3", "T1", "T2"], done=set())
+
+    assert plan.order.index("T1") < plan.order.index("T2") < plan.order.index("T3")
+
+
+def test_cycle_in_blocked_by_refuses_the_run():
+    """Refused before anything executes, so a doomed run costs seconds rather
+    than a night."""
+    cyclic = tickets(("T1", ("T2",)), ("T2", ("T1",)))
+
+    with pytest.raises(Refusal) as e:
+        plan_run(cyclic, ["T1", "T2"], done=set())
+
+    assert "T1" in str(e.value) and "T2" in str(e.value)
+
+
+def test_unsatisfiable_blocker_refuses_the_run():
+    """A blocker neither queued nor already carrying evidence can never be
+    satisfied by this run. `T9` below is done, so it is not the complaint; `T8`
+    is nowhere, and it is."""
+    queue = tickets(("T1", ("T8", "T9")))
+
+    with pytest.raises(Refusal) as e:
+        plan_run(queue, ["T1"], done={"T9"})
+
+    assert "T8" in str(e.value)
+    assert "T9" not in str(e.value)
+
+
+# --- D6: doneness is the record's existence ---------------------------------
+
+
+def test_doneness_is_evidence_file_existence(tmp_path):
+    """`promote_evidence` is only ever called on a promoted outcome, so the file
+    existing already means promoted. Any field read to answer the question is
+    redundant - including `passed`, which is why a modulo-baseline record is
+    just as done as a clean one."""
+    assert is_done(tmp_path, "T1") is False
+
+    path = evidence_path(tmp_path, "T1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"passed": False, "passed_modulo_baseline": True}) + "\n")
+
+    assert is_done(tmp_path, "T1") is True
+
+
+def test_absent_field_renders_as_not_recorded():
+    """`mutation_proof` is absent from all three records on disk - the field
+    postdates every session run so far. Rendering absence as 'no' would report
+    a proof as having failed when it was never attempted."""
+    assert field_display({}, "mutation_proof") == "not recorded"
+    assert field_display({"mutation_proof": None}, "mutation_proof") == "not recorded"
+    assert field_display({"mutation_proof": {"caught": 3}}, "mutation_proof") != "not recorded"
+
+
+def test_false_passed_modulo_baseline_is_not_read_as_failure():
+    """The sharpest trap in the record corpus. `pre_existing_only` returns False
+    whenever `commands_ok` is True (gate.py:219), so False on T003 - which
+    passed cleanly - means 'the baseline was not needed', not 'failed'. A
+    controller reading it as a verdict marks a passing ticket not-done, which is
+    a silent wrong answer and strictly worse than a loud KeyError."""
+    clean = {"passed": True, "passed_modulo_baseline": False}
+    modulo = {"passed": False, "passed_modulo_baseline": True}
+
+    assert verdict(clean) == "passed"
+    assert verdict(modulo) == "passed modulo baseline"
+
+
+# --- D12: re-invoking the same command resumes ------------------------------
+
+
+def test_rerunning_the_same_command_resumes_on_the_run_branch(monkeypatch, repo):
+    """No `--into <branch>` flag to look up at exactly the moment the operator
+    is annoyed and half-awake. Continuing from HEAD needs nothing remembered."""
+    drive(monkeypatch, repo, ["T1"])
+    first = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    drive(monkeypatch, repo, ["T2"])
+
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == first
+
+
+def test_done_tickets_are_skipped_and_not_reapproved(monkeypatch, repo):
+    """Re-approval rewrites `approved_at`, so doing it to a finished ticket
+    weakens a provenance line for no gain. A done ticket has nothing left to
+    baseline."""
+    evidence = evidence_path(repo, "T1")
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(json.dumps({"passed": True}) + "\n")
+
+    _, session, approvals, _ = drive(monkeypatch, repo, ["T1", "T2"])
+
+    assert session.ran == ["T2"]
+    assert [tid for tid, _ in approvals] == ["T2"]
+
+
+def test_refuses_to_start_from_a_per_ticket_branch(monkeypatch, repo):
+    """HEAD is either `main` (cut a run branch) or an `edad/run-*` branch
+    (continue on it). A per-ticket branch is neither, and running a queue on
+    top of one half-finished session's branch is not a state anything here
+    knows how to reason about."""
+    _git(repo, "checkout", "-q", "-b", "edad/t1")
+
+    with pytest.raises(Refusal) as e:
+        drive(monkeypatch, repo, ["T2"])
+
+    assert "edad/t1" in str(e.value)

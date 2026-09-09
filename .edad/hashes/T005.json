@@ -1,0 +1,67 @@
+{
+  "tests/test_session_queue.py": "1c4386ff3b220048bb13fe7338b4dbfc20099af63679f52006937b58543a29ad",
+  "_edad": {
+    "approved_at": "2026-09-09T16:35:50.111957+00:00",
+    "ticket_sha256": "f2533f6837536d2e7842cfd5ca37304f015a5272b8e2ef3a703f14f01b6114ff",
+    "decisions": [
+      "D1",
+      "D6",
+      "D12"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_queue_is_topologically_sorted_by_blocked_by -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_cycle_in_blocked_by_refuses_the_run -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_unsatisfiable_blocker_refuses_the_run -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_doneness_is_evidence_file_existence -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_absent_field_renders_as_not_recorded -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_false_passed_modulo_baseline_is_not_read_as_failure -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_rerunning_the_same_command_resumes_on_the_run_branch -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_done_tickets_are_skipped_and_not_reapproved -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_refuses_to_start_from_a_per_ticket_branch -q",
+        "exit_code": 4
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-09T16:35:48.329421+00:00",
+      "commit": "745bcd87203ec0de6e4b6b0a925c47e6cf85e2e1",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 2,
+          "keys": {
+            "pytest:tests/test_session_queue.py": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
