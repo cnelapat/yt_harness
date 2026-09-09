@@ -23,12 +23,15 @@ has never seen and cannot absorb.
 
 T004's decisions are here: D2 the integration branch, D3 fast-forward merges,
 D4 one subprocess per ticket, D5 just-in-time re-approval, D11 where the run
-leaves you. T005's (D1, D6, D12) and T006's (D7, D8, D9, D10) belong to their
-own tickets; drafts of both are recoverable from commit `1a48d51`.
+leaves you. T005's are here too: D1 the queue is a plan computed before
+anything executes, D6 doneness is the evidence record's existence, D12
+re-invoking the same command resumes. T006's (D7, D8, D9, D10) belong to their
+own ticket; a draft is recoverable from commit `1a48d51`.
 
-D13 is unenforced: v1 is sequential. Nothing below is built against parallel
-execution, and nothing below hardcodes against it either, so a later scheduler
-is a change rather than a redesign.
+D13 is unenforced: v1 is sequential. `plan_run` computes `Plan.independent`
+and nothing acts on it, so a later scheduler is a change rather than a
+redesign - and so the wall-clock parallelism would have saved is measurable
+rather than assumed.
 """
 
 from __future__ import annotations
@@ -38,12 +41,16 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from edad.gate import check_freeze, load_ticket, repo_root
 
 MAIN_BRANCH = "main"
+# HEAD is the whole memory of a run (D12), so the prefix is what tells a
+# resumable branch from anything else root might be standing on.
+RUN_BRANCH_PREFIX = "edad/run-"
 
 
 class Refusal(Exception):
@@ -109,7 +116,172 @@ def discard_command(
 
 
 def new_run_branch() -> str:
-    return "edad/run-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    return RUN_BRANCH_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+
+# --- D1: the queue is a plan, made before anything runs ---------------------
+
+
+@dataclass
+class Plan:
+    """What the run will do, decided before any of it happens.
+
+    `order` is the ids to run, topologically sorted. `done` is the ids the
+    operator asked for that were already finished - dropped from the queue,
+    never re-run and never re-approved. `independent` groups ids that block on
+    none of each other.
+
+    Nothing acts on `independent`; v1 is sequential (D13). It is computed and
+    recorded anyway, so that a later scheduler is a change rather than a
+    redesign, and so the wall-clock parallelism would have saved is measurable
+    rather than assumed.
+    """
+
+    order: list[str] = field(default_factory=list)
+    done: set[str] = field(default_factory=set)
+    independent: list[set[str]] = field(default_factory=list)
+
+
+def blockers_of(tickets: dict[str, dict], ticket_id: str) -> list[str]:
+    """`blocked_by`, defaulted the way `preflight` defaults it
+    (`edad/session.py:109`) so the controller and the session cannot disagree
+    about what an absent or null field means.
+
+    Tolerant of an id with no loaded ticket, because the common case is exactly
+    that: a queued ticket names a blocker that is not itself queued, and whether
+    that is fine is `plan_run`'s question, not this one's.
+    """
+    return list((tickets.get(ticket_id) or {}).get("blocked_by") or [])
+
+
+def plan_run(tickets: dict[str, dict], requested: Sequence[str], done: set[str]) -> Plan:
+    """Order the queue by the tickets' own `blocked_by`; refuse the impossible.
+
+    Pure, and called before the run branch is cut, so a doomed queue costs
+    seconds rather than a night: an operator who types the tickets in the wrong
+    order would otherwise fail on the first dependency, and one who types a
+    ticket whose blocker is nowhere would get the same failure hours in.
+
+    Ordering comes from `blocked_by` rather than from argument order, and
+    rather than from a run manifest - a manifest would put ordering in a second
+    place beside `blocked_by`, where the two can disagree.
+    """
+    queued = list(dict.fromkeys(requested))
+    queued_set = set(queued)
+
+    # Checked before the cycle: a blocker that is nowhere is a typo or a ticket
+    # nobody wrote, and naming it is a better answer than naming a cycle it may
+    # also happen to sit in. Only the unsatisfiable ones are named - a message
+    # listing every blocker sends the operator off to check the ones that were
+    # already fine.
+    unsatisfiable: list[str] = []
+    for ticket_id in queued:
+        for blocker in blockers_of(tickets, ticket_id):
+            if blocker in queued_set or blocker in done or blocker in unsatisfiable:
+                continue
+            unsatisfiable.append(blocker)
+    if unsatisfiable:
+        raise Refusal(
+            "this queue can never be satisfied: "
+            + ", ".join(unsatisfiable)
+            + " - neither queued here nor carrying an evidence record. Queue "
+            "them ahead of the tickets they block, or run them first."
+        )
+
+    # A done ticket is not run, so it constrains nothing, and a blocker
+    # satisfied from disk was never in the queue to be ordered against.
+    to_run = [ticket_id for ticket_id in queued if ticket_id not in done]
+    running = set(to_run)
+    remaining = {t: {b for b in blockers_of(tickets, t) if b in running} for t in to_run}
+
+    plan = Plan()
+    while remaining:
+        # Equal depth means no path between them - a path would deepen one end
+        # - so a level is exactly a group of mutually independent ids. Taken in
+        # the operator's own order within the level, which is the one place
+        # argument order can still be honoured without contradicting a blocker.
+        level = [t for t in to_run if t in remaining and not remaining[t]]
+        if not level:
+            raise Refusal(
+                "blocked_by has a cycle among: "
+                + ", ".join(sorted(remaining))
+                + ". No order satisfies it, so the run refuses now rather than "
+                "discovering it on the first dependency hours in."
+            )
+        plan.order.extend(level)
+        plan.independent.append(set(level))
+        for ticket_id in level:
+            del remaining[ticket_id]
+        for deps in remaining.values():
+            deps.difference_update(level)
+
+    # What the operator asked for and had already finished. A blocker satisfied
+    # from disk is not a member: they never asked for it, so reporting it as a
+    # skipped ticket would answer a question nobody put.
+    plan.done = {ticket_id for ticket_id in queued if ticket_id in done}
+    return plan
+
+
+# --- D6: doneness is the evidence record's existence ------------------------
+
+
+def evidence_path(root: Path, ticket_id: str) -> Path:
+    """Where `promote_evidence` lands a record (`edad/session.py:584`) and where
+    `preflight` looks for a blocker's (`:110`). One expression, so the
+    controller and the session cannot drift into disagreeing about what doneness
+    looks like on disk."""
+    return Path(root) / ".edad" / "evidence" / f"{ticket_id}.json"
+
+
+def is_done(root: Path, ticket_id: str) -> bool:
+    """The file existing is the whole answer.
+
+    `promote_evidence` is only ever called on a promoted outcome
+    (`edad/session.py:680`), so a record on disk already means promoted and any
+    field read to confirm it is redundant. At worst it is wrong: the records on
+    disk are not uniform, and reading one of their keys as a verdict marks a
+    passing ticket not-done. See `verdict`.
+    """
+    return evidence_path(root, ticket_id).exists()
+
+
+def verdict(record: dict) -> str:
+    """How a done ticket passed - never whether it did.
+
+    `pre_existing_only` returns False whenever `commands_ok` is True
+    (`edad/gate.py:219`), so `passed_modulo_baseline` is False on T003, which
+    passed cleanly. False there means *the baseline was not needed*, not
+    *failed*. A controller reading that key as a verdict marks a passing ticket
+    not-done - a silent wrong answer, strictly worse than a loud KeyError. So
+    the verdict is taken from `passed`, and the modulo case is what remains.
+    """
+    return "passed" if record.get("passed") else "passed modulo baseline"
+
+
+def field_display(record: dict, key: str) -> str:
+    """Absent is not false.
+
+    `mutation_proof` is missing from all three records on disk - the field
+    postdates every session run so far - and rendering that as "no" reports a
+    proof as having failed when it was never attempted.
+    """
+    value = record.get(key)
+    return "not recorded" if value is None else str(value)
+
+
+def done_set(root: Path, requested: Sequence[str], tickets: dict[str, dict]) -> set[str]:
+    """Every id the plan is about to reason about that carries a record: the
+    queued ids **and the blockers they name**.
+
+    Probing only the queued ids refuses a run whose blocker is finished but was
+    not re-typed, and reports that blocker as having no evidence record when it
+    has one. The workaround - re-listing every finished ancestor on every
+    invocation - is the remembered state D12 exists to abolish.
+    """
+    ids = set(requested)
+    for ticket_id in requested:
+        ids.update(blockers_of(tickets, ticket_id))
+    return {ticket_id for ticket_id in ids if is_done(root, ticket_id)}
 
 
 # --- git --------------------------------------------------------------------
@@ -130,6 +302,70 @@ def branch_exists(root: Path, branch: str) -> bool:
         ).returncode
         == 0
     )
+
+
+def current_branch(root: Path) -> str:
+    return git(root, "rev-parse", "--abbrev-ref", "HEAD")
+
+
+def is_ancestor(root: Path, ref: str, of: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", ref, of],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def start_branch(root: Path) -> tuple[bool, str]:
+    """Where this invocation runs, and whether a night is already standing.
+
+    HEAD is the whole memory of a run, which is what makes re-invoking the exact
+    same command a resume. An `--into <branch>` flag would be correct, and it
+    would be a flag to look up at exactly the moment the operator is annoyed and
+    half-awake.
+
+    Returns `(resumed, run_branch)`; on a fresh start the branch is not named
+    here, because it must not be cut until the plan has been made.
+    """
+    head = current_branch(root)
+    if head == MAIN_BRANCH:
+        return False, ""
+    if head.startswith(RUN_BRANCH_PREFIX):
+        return True, head
+    raise Refusal(
+        f"root is on {head}, which is neither {MAIN_BRANCH} nor an "
+        f"{RUN_BRANCH_PREFIX}* branch. A queue run on top of one half-finished "
+        "session's branch is not a state anything here knows how to reason "
+        "about; check out the run branch you meant to continue, or "
+        f"{MAIN_BRANCH} to start a new one."
+    )
+
+
+def rollback_branches(root: Path, run_branch: str, created: Sequence[str] = ()) -> list[str]:
+    """Everything the night put on the run branch, plus what it left beside it.
+
+    The rollback covers the run branch, not the invocation. A resumed run
+    rebuilds its own bookkeeping empty and a done ticket never reaches the probe
+    that fills it, so a discard naming only what *this* invocation created would
+    leave the first invocation's branches pointing at all of that work - the
+    false rollback D11 already refused, back within reach because D12 exists.
+
+    So the set is derived from the branch rather than from the invocation:
+    reachable from the run branch and **not** from `main`. Not "merged into the
+    run branch" - every ticket branch of every earlier chain is an ancestor of
+    `main`, and so of the run branch, and a discard built that way deletes them
+    all. `created` covers the other direction: a branch this invocation made and
+    did not merge is reachable from neither.
+    """
+    branches = set(created)
+    listed = git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/edad/t*")
+    for branch in listed.split():
+        if is_ancestor(root, branch, run_branch) and not is_ancestor(root, branch, MAIN_BRANCH):
+            branches.add(branch)
+    return sorted(branches)
 
 
 def registered_worktrees(root: Path) -> set[Path]:
@@ -238,10 +474,16 @@ def print_summary(
     ticket_branches: list[str],
     worktree_paths: list[str],
 ) -> None:
-    """The summary and the rollback, printed on every exit path - a clean
-    finish, a merge git refused, and a `Refusal` raised between two tickets
-    alike, because whatever already merged is sitting on the run branch in all
-    three. The discard command goes last, so it is the final runnable line."""
+    """The summary and the rollback, printed on every exit path that has a run
+    branch - a clean finish, a merge git refused, a `Refusal` raised between two
+    tickets, and a plan-stage `Refusal` on a *resumed* run alike, because
+    whatever already merged is sitting on the run branch in all four.
+
+    Not on a plan-stage refusal from a fresh cut: the plan refuses before the
+    branch exists, so a discard command there names a branch that was never
+    created, `git branch -D` fails, and the operator watches a rollback that
+    could not have worked. The discard command goes last, so it is the final
+    runnable line."""
     print(f"\nrun branch: {run_branch}")
     if not results:
         print("  (no ticket ran)")
@@ -252,55 +494,82 @@ def print_summary(
 
 
 def run_queue(root: Path, ticket_ids: list[str]) -> int:
-    """Cut an integration branch from `main` and work the queue on it.
+    """Plan the queue, then work it on an integration branch.
 
-    Ids run in the order given; ordering, cycles and unsatisfiable blockers are
-    T005's. For each one - re-approve against the run branch, spawn the
-    session, and on a promoted outcome merge its branch back.
+    The plan comes first and is made from the tickets' own `blocked_by` (D1),
+    before the branch is cut and before any session is spawned, so a cycle or a
+    blocker that is nowhere costs seconds rather than a night.
 
-    The merges are fast-forwards by construction, because each ticket branches
-    from the run branch's then-current HEAD. Asserting `--ff-only` therefore
-    costs nothing and buys an alarm: a non-fast-forward means something ran
-    concurrently or a human intervened, and resolving it by hand would put code
-    on the run branch that no `full_gate` ever judged.
+    Where it runs is read off HEAD (D12): `main` cuts a fresh `edad/run-*`,
+    an existing `edad/run-*` is continued on, and anything else refuses. Tickets
+    already carrying an evidence record (D6) are dropped from the queue - never
+    re-run, and never re-approved, since re-approval rewrites `approved_at` and
+    doing that to a finished ticket weakens a provenance line for no gain.
+
+    For each remaining one - re-approve against the run branch, spawn the
+    session, and on a promoted outcome merge its branch back. The merges are
+    fast-forwards by construction, because each ticket branches from the run
+    branch's then-current HEAD. Asserting `--ff-only` therefore costs nothing
+    and buys an alarm: a non-fast-forward means something ran concurrently or a
+    human intervened, and resolving it by hand would put code on the run branch
+    that no `full_gate` ever judged.
 
     Root is left on the run branch. Returning it to `main` would hide the
     night's work from a continuation run, which finds the branch by looking at
     HEAD.
     """
     root = Path(root)
-    run_branch = new_run_branch()
-    try:
-        git(root, "checkout", "-q", "-b", run_branch, MAIN_BRANCH)
-    except subprocess.CalledProcessError as e:
-        raise Refusal(
-            f"could not cut {run_branch} from {MAIN_BRANCH}: {(e.stderr or e.stdout).strip()}"
-        ) from e
+    resumed, run_branch = start_branch(root)
 
-    results: list[tuple[str, str, str | None]] = []
-    # What the run actually created, checked rather than assumed. A session
-    # does not create its branch and worktree before it does any work:
-    # `preflight` runs first (edad/session.py:604, :607), so a ticket refused
-    # for a missing blocker evidence record leaves neither - and in a queue
-    # that is the likeliest refusal there is, because `blocked_by` is what a
-    # queue is for. Naming them anyway aborts the discard command's `&&` chain
-    # on its first step, so the rollback the operator watched scroll past
-    # deleted nothing and the run branch is still standing.
-    ticket_branches: list[str] = []
+    try:
+        tickets = {ticket_id: load_ticket(root, ticket_id) for ticket_id in ticket_ids}
+        plan = plan_run(tickets, ticket_ids, done_set(root, ticket_ids, tickets))
+    except BaseException:
+        # Refusal, and the bare SystemExit(2) `load_ticket` raises through
+        # `gate.die()`. Cut fresh there is no branch yet and nothing to roll
+        # back; resumed, a night is already standing on the run branch and the
+        # way to throw it away has to be on screen.
+        if resumed:
+            print_summary(run_branch, [], rollback_branches(root, run_branch), [])
+        raise
+
+    if not resumed:
+        run_branch = new_run_branch()
+        try:
+            git(root, "checkout", "-q", "-b", run_branch, MAIN_BRANCH)
+        except subprocess.CalledProcessError as e:
+            raise Refusal(
+                f"could not cut {run_branch} from {MAIN_BRANCH}: {(e.stderr or e.stdout).strip()}"
+            ) from e
+
+    results: list[tuple[str, str, str | None]] = [
+        (ticket_id, "already done, skipped", None)
+        for ticket_id in ticket_ids
+        if ticket_id in plan.done
+    ]
+    # What this invocation created, checked rather than assumed. A session does
+    # not create its branch and worktree before it does any work: `preflight`
+    # runs first (edad/session.py:604, :607), so a ticket refused for a missing
+    # blocker evidence record leaves neither - and in a queue that is the
+    # likeliest refusal there is, because `blocked_by` is what a queue is for.
+    # Naming them anyway aborts the discard command's `&&` chain on its first
+    # step, so the rollback the operator watched scroll past deleted nothing and
+    # the run branch is still standing. `rollback_branches` adds what earlier
+    # invocations left on the same run branch.
+    created: list[str] = []
     worktree_paths: list[str] = []
     code = 0
 
     try:
-        for ticket_id in ticket_ids:
-            ticket = load_ticket(root, ticket_id)
-            reapprove(root, ticket)
+        for ticket_id in plan.order:
+            reapprove(root, tickets[ticket_id])
             outcome = outcome_of(run_session(root, ticket_id))
 
             # Independently: a session can leave a branch with no worktree, or
             # a worktree without having promoted.
             branch = f"edad/{ticket_id.lower()}"
             if branch_exists(root, branch):
-                ticket_branches.append(branch)
+                created.append(branch)
             worktree = root / ".edad" / "worktrees" / ticket_id
             if worktree.resolve() in registered_worktrees(root):
                 worktree_paths.append(str(worktree))
@@ -328,7 +597,9 @@ def run_queue(root: Path, ticket_ids: list[str]) -> int:
         # SystemExit(2) that `load_ticket` raises through `gate.die()`. Making
         # approval a subprocess removed one instance of that hazard; it did not
         # remove the hazard.
-        print_summary(run_branch, results, ticket_branches, worktree_paths)
+        print_summary(
+            run_branch, results, rollback_branches(root, run_branch, created), worktree_paths
+        )
 
     return code
 
