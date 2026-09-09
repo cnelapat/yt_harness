@@ -576,3 +576,80 @@ def test_a_done_blocker_outside_the_queue_is_satisfied(monkeypatch, repo):
 
     assert session.ran == ["T2"]
     assert [tid for tid, _ in approvals] == ["T2"]
+
+
+def test_a_resumed_run_discards_the_whole_night(monkeypatch, repo, capsys):
+    """The rollback covers the run branch, not the invocation.
+
+    `ticket_branches` is rebuilt empty on every invocation, and a done ticket
+    never reaches the probe that fills it - so a resumed run prints a command
+    naming only what it happened to create this time. The branch the *first*
+    invocation made still points at all of that work, and the operator who ran
+    the printed command believes the night is gone. That is the same false
+    rollback D11 already refused; D12 is what puts it back within reach.
+
+    `edad/t0` stands for a ticket branch from an earlier chain, already merged
+    into `main`. It is reachable from the run branch only because `main` is,
+    and the night did not create it, so a discard built from "merged into the
+    run branch" deletes four ancestors of `main` along with the night. The rule
+    is reachable from the run branch and *not* from `main`.
+
+    Run rather than pattern-matched, for the reason the other discard tests are:
+    every substring assertion passes while the command deletes the wrong set.
+    """
+    _git(repo, "branch", "edad/t0", "main")
+
+    drive(monkeypatch, repo, ["T1"])
+    # What makes the second invocation a resume rather than a re-run: T1 is
+    # merged onto the run branch and carrying a record, so it is skipped.
+    evidence = evidence_path(repo, "T1")
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(json.dumps({"passed": True}) + "\n")
+    capsys.readouterr()
+
+    _, session, _, _ = drive(monkeypatch, repo, ["T1", "T2"])
+    assert session.ran == ["T2"]
+
+    printed = capsys.readouterr().out
+    command = [ln.strip() for ln in printed.splitlines() if ln.strip().startswith("git ")][-1]
+    proc = subprocess.run(
+        command, cwd=repo, shell=True, capture_output=True, text=True, check=False
+    )
+
+    assert proc.returncode == 0, command + "\n" + proc.stdout + proc.stderr
+    assert sorted(_git(repo, "branch", "--format=%(refname:short)").split()) == [
+        "edad/t0",
+        "main",
+    ], command
+
+
+def test_a_plan_refusal_prints_a_discard_only_when_there_is_a_night(monkeypatch, repo, capsys):
+    """A refusal raised while planning ends the run before any ticket is spawned.
+    Whether that leaves anything to roll back depends on how the run started.
+
+    Cut fresh, nothing exists yet - and a discard command here would name a run
+    branch that was never created, so `git branch -D` fails and the operator
+    watches a rollback that could not have worked. Resumed, a night is already
+    standing on the run branch, and the way to throw it away has to be on
+    screen; the plan refuses before the branch is cut, which is exactly where
+    `print_summary` is not.
+    """
+    unsatisfiable = {"T2": ticket("T2", ("T99",))}
+
+    with pytest.raises(Refusal):
+        drive(monkeypatch, repo, ["T2"], catalog=unsatisfiable)
+
+    assert _git(repo, "branch", "--format=%(refname:short)").split() == ["main"]
+    assert "git branch -D" not in capsys.readouterr().out
+
+    drive(monkeypatch, repo, ["T1"])
+    run_branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    capsys.readouterr()
+
+    with pytest.raises(Refusal):
+        drive(monkeypatch, repo, ["T2"], catalog=unsatisfiable)
+
+    commands = [
+        ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.strip().startswith("git ")
+    ]
+    assert any(run_branch in c and "edad/t1" in c for c in commands), commands

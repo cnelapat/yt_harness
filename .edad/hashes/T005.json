@@ -1,8 +1,8 @@
 {
-  "tests/test_session_queue.py": "382cfbb5661d22b068fe143e63e17e4e90340e99a190b457e0b2b75249fd83a1",
+  "tests/test_session_queue.py": "eb273d47d12b34bdf925ae47861d2f2849b30fae6cdbc920f1ad67a9b71aa9d1",
   "_edad": {
-    "approved_at": "2026-09-09T16:56:11.424393+00:00",
-    "ticket_sha256": "c59982e247a621556bc7ffd6312ef852dd8894f4028770bbe5332b899e356618",
+    "approved_at": "2026-09-09T17:21:36.825972+00:00",
+    "ticket_sha256": "c4602e0e28d875848c30e28accfb1e9803cb2ffd05a83b338e6e49ad562e73e3",
     "decisions": [
       "D1",
       "D6",
@@ -48,12 +48,20 @@
       {
         "command": "python3 -m pytest tests/test_session_queue.py::test_a_done_blocker_outside_the_queue_is_satisfied -q",
         "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_resumed_run_discards_the_whole_night -q",
+        "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_plan_refusal_prints_a_discard_only_when_there_is_a_night -q",
+        "exit_code": 4
       }
     ],
     "mutation_proof": null,
     "full_gate_baseline": {
-      "taken_at": "2026-09-09T16:56:09.647044+00:00",
-      "commit": "b4ffdb116966c20f430a66e0d60dba525c4e1074",
+      "taken_at": "2026-09-09T17:21:34.663000+00:00",
+      "commit": "37db46d2134917d19d2738e5c9831c2e6a1b22d5",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 2,
