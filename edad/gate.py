@@ -810,17 +810,35 @@ def baseline_growth(old: dict, new: dict) -> list[str]:
 # --- commands --------------------------------------------------------------
 
 
-def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[CommandResult]:
+def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[dict]:
     """Run the acceptance commands before the work exists and require them to
-    fail. Returns the results; refuses approval otherwise.
+    fail WITH TEETH. Returns the red-proof entries; refuses approval otherwise.
 
     Everything downstream rests on the frozen tests having teeth. Nothing
     checked that. A test that asserts nothing passes before the work exists,
     sails through the gate on the first iteration, and promotes evidence for an
     implementation nobody wrote - the freeze mechanism faithfully protecting a
     contract that says nothing.
+
+    Redness alone was never that check, and every red proof this repo has taken
+    shows it: a greenfield ticket's module does not exist at approve time, so its
+    commands fail during collection, the test never runs, and no assertion in it
+    is ever executed. What the lock recorded was that an import failed. So the
+    bar the mutation proof already enforces is applied here too - a pytest FAILED
+    at a node id inside one of the ticket's frozen files, per command, judged by
+    `detected_node_ids` unchanged. In practice the author lands importable
+    signature stubs in `scope` before approve, which turns `ERROR <file>` into
+    `FAILED <file>::<test> - NotImplementedError`; a test that asserts nothing
+    then goes green instead, and the all-pass refusal below catches it.
+
+    Returns one {command, exit_code, detected_by} dict per failing command, in
+    acceptance order, which cmd_approve writes into the lock verbatim. Detection
+    is computed here, where the output is read, rather than recomputed at the
+    lock site from a truncated output_tail - the same reason CommandResult
+    already stores named_paths and failure_keys instead of re-deriving them.
     """
     kills = ticket.get("kill_conditions") or {}
+    frozen = list(ticket.get("frozen") or [])
     red = run_commands(
         root, commands,
         deny_network=(kills.get("network_access") == "deny"),
@@ -847,7 +865,63 @@ def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[Comm
             "Approval happens before the work. Re-run with --allow-passing only "
             "if you are deliberately re-approving a ticket already implemented."
         )
-    return red
+
+    # D16, the red tier's half of D8's rule. A linter goes red on a module that
+    # does not exist whether or not any test asserts anything, so counting its
+    # exit code as the proof reopens the vacuity hole for exactly the commands it
+    # covered. Refused rather than exempted: every ticket in this repo pairs its
+    # pytest commands with `ruff check .`, so an exemption keyed on the absence
+    # of a pytest command is the vacuous case the rule exists to catch, wearing a
+    # waiver.
+    if not any(_supplies_detection(c) for c in commands):
+        die(
+            "no acceptance command can supply the red proof: "
+            + "; ".join(repr(c) for c in commands)
+            + ". The proof is a pytest FAILED at a node id in a frozen file - a "
+            "non-zero exit from anything else says only that something went red, "
+            "which a test asserting nothing produces just as readily."
+        )
+
+    # Per command, on the union of offenders. A FAILED reported by one command
+    # does not discharge another: on a twelve-command ticket that would prove one
+    # test has teeth and leave eleven unexamined, the shape D6 rejected for
+    # `expects` and D7 for survivors. And an author who learns of the next
+    # offender only on the next approve fixes twelve commands one approve at a
+    # time, so all of them are named at once.
+    offenders = [
+        c for c in red
+        if _supplies_detection(c.command) and not detected_node_ids(c.output_tail, frozen)
+    ]
+    if offenders:
+        die(
+            "these acceptance command(s) produced no pytest FAILED at a node id "
+            "inside " + (", ".join(frozen) or "a frozen file") + ": "
+            + "; ".join(f"[{c.exit_code}] {c.command!r}" for c in offenders)
+            + ". ERROR is not FAILED: a test that asserts nothing never runs, so "
+            "the worst it can produce is a collection error, and an import break "
+            "turns the whole suite red while proving nothing about any assertion "
+            "in it. Nor is a FAILED elsewhere - that is an assertion firing in a "
+            "test this ticket does not freeze and cannot hold the agent to. Land "
+            "importable stubs in `scope` so the frozen tests reach their "
+            "assertions and fail there."
+        )
+
+    return [
+        {
+            "command": c.command,
+            "exit_code": c.exit_code,
+            # Empty for a non-pytest command, and recorded rather than omitted:
+            # that is what says in the lock that the command went red and
+            # supplied nothing.
+            "detected_by": (
+                detected_node_ids(c.output_tail, frozen)
+                if _supplies_detection(c.command)
+                else []
+            ),
+        }
+        for c in red
+        if not c.ok
+    ]
 
 
 # --- the mutation proof ------------------------------------------------------
@@ -1180,7 +1254,7 @@ def refuse_silent_widening(root: Path, ticket_id: str, baseline: dict) -> None:
         )
 
 
-def print_approval_proof(red: list[CommandResult], mutation_proof: dict | None) -> None:
+def print_approval_proof(red: list[dict], mutation_proof: dict | None) -> None:
     """What this approval rests on. Exactly one of the three is true."""
     if mutation_proof:
         muts = mutation_proof.get("mutations") or []
@@ -1190,8 +1264,14 @@ def print_approval_proof(red: list[CommandResult], mutation_proof: dict | None) 
             print(f"      -> {', '.join(m['detected_by'])}  ({m['acceptance_command']})")
     elif red:
         print("  red proof (these failed before the work existed):")
-        for c in red:
-            print(f"    [{c.exit_code}] {c.command}")
+        for e in red:
+            # The node ids, not just the exit code: which frozen test was proven
+            # to have teeth is the whole claim, and a command that supplied none
+            # says so here rather than hiding behind a sibling that did.
+            nodes = e.get("detected_by") or []
+            detail = ", ".join(nodes) if nodes else "supplied no FAILED"
+            print(f"    [{e['exit_code']}] {e['command']}")
+            print(f"      -> {detail}")
     else:
         print("  ! no red proof recorded (--allow-passing)")
 
@@ -1279,10 +1359,12 @@ def cmd_approve(args) -> int:
         # lock and every record derived from it name them without re-reading
         # the ticket, which may have been edited since.
         "decisions": list(ticket.get("decisions") or []),
-        "red_proof": [
-            {"command": c.command, "exit_code": c.exit_code} for c in red if not c.ok
-        ]
-        or None,
+        # Written verbatim as prove_red_or_die measured it, one entry per failing
+        # command, each carrying the frozen node ids that command reported
+        # FAILED. A bare {command, exit_code} shape loses the FAILED/ERROR
+        # distinction the whole design rests on - the ground this block already
+        # rejects it on for mutation_proof.
+        "red_proof": list(red) or None,
         # Records the node ids, not merely that the gate was satisfied: a
         # {command, exit_code} shape mirroring red_proof would lose the
         # FAILED/ERROR distinction the whole design rests on.
@@ -1504,7 +1586,27 @@ def report_proof(rec: Record) -> None:
             f"{len(distinct)} distinct node id(s)"
         )
     elif rec.red_proof:
-        print(f"  red proof at approval: {len(rec.red_proof)} command(s) failed")
+        # On the presence of the stored field, never on the exit code. The lock
+        # is what records that anything was measured, so an old-shape entry
+        # carrying exit 1 - which is what a real FAILED exits with - still reads
+        # as pre-amendment. Inferring would classify the five existing locks for
+        # free while inventing a claim their runs never recorded.
+        measured = all(
+            isinstance(e, dict) and "detected_by" in e for e in rec.red_proof
+        )
+        if measured:
+            nodes = {n for e in rec.red_proof for n in (e.get("detected_by") or [])}
+            print(
+                f"  red proof at approval: {len(rec.red_proof)} command(s) failed, "
+                f"{len(nodes)} frozen node id(s) reported FAILED"
+            )
+        else:
+            print(
+                f"  ! pre-amendment red proof at approval: {len(rec.red_proof)} "
+                f"command(s) went red, but nothing recorded which frozen node ids "
+                f"reported FAILED - the tests' teeth were never verified, and a "
+                f"non-zero exit here may have been a collection error"
+            )
     elif rec.commands_ok and rec.approved:
         # A pass with no red proof is a weaker claim, and saying so is the
         # difference between "the test passes" and "a test that could fail,
