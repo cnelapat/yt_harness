@@ -1,8 +1,8 @@
 {
-  "tests/test_session_queue.py": "91f2a704adb934296369b339189bfa9c747e0b7eda4e35e10a660c345be4af90",
+  "tests/test_session_queue.py": "532ca13afbe7bc80a6bb110f521b23f32e2ab02a608150e303ca62a555d54f92",
   "_edad": {
-    "approved_at": "2026-09-09T15:17:58.400183+00:00",
-    "ticket_sha256": "289539bf83f27e25111b7a7f26dcab52185bc6205dc9c751224384e844e12f16",
+    "approved_at": "2026-09-09T15:37:52.565588+00:00",
+    "ticket_sha256": "43d90222c98c21bdf3a043250fe428e9cde10ebea16e2e8a7ded05440b6ecce8",
     "decisions": [
       "D2",
       "D3",
@@ -66,12 +66,16 @@
       {
         "command": "python3 -m pytest tests/test_session_queue.py::test_refusal_mid_queue_still_prints_the_discard_command -q",
         "exit_code": 4
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_discard_command_names_only_what_the_run_created -q",
+        "exit_code": 4
       }
     ],
     "mutation_proof": null,
     "full_gate_baseline": {
-      "taken_at": "2026-09-09T15:17:56.033468+00:00",
-      "commit": "b9cdcfd9dc97afda7452d2f8303a7b88c82a12ad",
+      "taken_at": "2026-09-09T15:37:49.933828+00:00",
+      "commit": "afda8be132a0317999965996af48bf301dd55fb6",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 2,
