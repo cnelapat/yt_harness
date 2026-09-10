@@ -166,7 +166,7 @@ def drive(monkeypatch, repo: Path, ids: list[str], session=None, catalog=None, *
     approvals = Reapprovals()
     gates = []
 
-    def fake_final_gate(root: Path) -> dict:
+    def fake_final_gate(root: Path, *_) -> dict:
         gates.append(_git(root, "rev-parse", "HEAD").strip())
         return {"passed": True, "commands": []}
 
@@ -894,10 +894,10 @@ def test_the_final_gate_runs_the_commands_the_spec_names(monkeypatch, repo):
         seen.append(list(commands))
         return [_FakeResult(c) for c in commands]
 
-    monkeypatch.setattr(sq, "final_gate_spec", lambda root: (list(declared), 900))
+    monkeypatch.setattr(sq, "final_gate_spec", lambda root, *_: (list(declared), 900))
     monkeypatch.setattr(sq, "run_commands", fake_run_commands)
 
-    gate = sq.final_gate(repo)
+    gate = sq.final_gate(repo, ["T1"])
 
     assert seen == [declared], f"the final gate ran {seen} rather than the spec's commands"
     assert [c["command"] for c in gate["commands"]] == declared
@@ -909,4 +909,146 @@ def test_the_final_gate_runs_the_commands_the_spec_names(monkeypatch, repo):
     monkeypatch.setattr(
         sq, "run_commands", lambda root, commands, **kw: [_FakeResult(commands[0], 1)]
     )
-    assert sq.final_gate(repo)["passed"] is False
+    assert sq.final_gate(repo, ["T1"])["passed"] is False
+
+
+# --- T009: the final gate's own bounds, and why the queue stopped -----------
+#
+# T006's review found four behaviours its tests did not hold - those are T008's,
+# and they are defects in the tests. It found three more in the code, where the
+# implementation matches the ticket and the ticket is what is wrong: the final
+# gate borrowing an agent's hang budget for a suite no agent is in (D23), the
+# gate unioned over every ticket on disk rather than the ones the run is made of
+# (D24), and a queue stopped by a merge git refused saying nothing about it in
+# the run log (D25). Spec-level, so they are amended and re-run.
+
+# T006 raised its own `command_timeout_s` to 1800 for reasons that were entirely
+# about how long an agent may hang. Nothing would choose the number below as a
+# test suite's bound, which is exactly the point: whatever a ticket allows its
+# agent, the final gate's bound is not that.
+AGENT_HANG_BUDGET_S = 4242
+
+
+def write_ticket(
+    root: Path, tid: str, full_gate: list[str], hang_budget_s: int | None = None
+) -> None:
+    """A real ticket on disk, because the defect D24 names is a glob. A catalog
+    injected at the `load_ticket` seam cannot show a ticket the run never queued
+    reaching the gate anyway - the seam is the thing being accused."""
+    lines = ["---", f"id: {tid}", "full_gate:"]
+    lines += [f"  - {command}" for command in full_gate]
+    if hang_budget_s is not None:
+        lines += ["kill_conditions:", f"  command_timeout_s: {hang_budget_s}"]
+    lines += ["---", "", f"{tid} body.", ""]
+    (root / ".edad" / "tickets" / f"{tid}.md").write_text("\n".join(lines))
+
+
+def latest_run_log(root: Path) -> dict:
+    return json.loads(sorted((root / ".edad" / "runs").glob("*.json"))[-1].read_text())
+
+
+def test_final_gate_timeout_is_its_own_bound(repo):
+    """D23. `command_timeout_s` is a `kill_conditions` entry: it bounds how long
+    an *agent* may hang inside a session. The final gate is a suite the
+    controller runs with no agent in it, so borrowing that number means a ticket
+    that raised its own timeout - as T006 did, for measured reasons entirely
+    about the agent - silently changes how long the night's last gate may take.
+    Two quantities under one name is how a wall-clock budget stops meaning
+    anything: the operator sets a bound, the queue honours it, and then the
+    epilogue runs on a bound nobody chose."""
+    write_ticket(repo, "T1", ["python3 -m pytest -q"], hang_budget_s=AGENT_HANG_BUDGET_S)
+
+    _, timeout_s = sq.final_gate_spec(repo, ["T1"])
+
+    assert timeout_s == sq.FINAL_GATE_TIMEOUT_S, (
+        f"the final gate ran on {timeout_s}s, which is not the bound chosen for it"
+    )
+    assert timeout_s != AGENT_HANG_BUDGET_S, "the final gate is on the agent's hang budget"
+
+
+def test_final_gate_spec_unions_only_the_queued_tickets(repo):
+    """The union of `full_gate` across the ids the run is made of, first-seen
+    order, deduplicated as it already is. Order follows the queue rather than
+    the filename sort, and that is what tells the two apart: a spec that globs
+    `.edad/tickets/*.md` answers in directory order whatever it was asked."""
+    write_ticket(repo, "T1", ["python3 -m pytest -q", "ruff check ."])
+    write_ticket(repo, "T2", ["ruff check .", "python3 -m mypy ."])
+
+    commands, _ = sq.final_gate_spec(repo, ["T2", "T1"])
+
+    assert commands == ["ruff check .", "python3 -m mypy .", "python3 -m pytest -q"]
+
+
+def test_a_ticket_outside_the_run_cannot_widen_the_final_gate(repo):
+    """D24. Today every ticket declares the same two commands, so the glob is
+    invisible; the first one to declare a third joins the final gate of every run
+    that does not include it, and the night ends measuring a claim about code it
+    never touched. Taking the gate from the tickets rather than a second list was
+    right - D10's reason, that a gate kept beside the one the tickets carry is a
+    place for the two to disagree - but "the tickets" means the ones the run is
+    made of."""
+    write_ticket(repo, "T1", ["python3 -m pytest -q"])
+    write_ticket(repo, "T2", ["python3 -m pytest -q"])
+    write_ticket(repo, "T9", ["python3 -m pytest -q", "cargo test --all"])
+
+    commands, _ = sq.final_gate_spec(repo, ["T1", "T2"])
+
+    assert commands == ["python3 -m pytest -q"], (
+        f"T9 is on disk and not in this run, and the gate came back {commands}"
+    )
+
+
+def test_the_run_log_names_why_the_queue_stopped(monkeypatch, repo):
+    """D25. A merge git refused stops the queue, and the log records the ticket
+    `promoted, merge refused`, everything behind it `not_run`, and `breaker:
+    null` - three true statements that never say why. The controller has the
+    reason and prints it, but stdout is the scatter the run log replaced: D9
+    exists because correlating a night by hand at 8am is what one file is for."""
+
+    class DivergingSession(FakeSession):
+        def __call__(self, root: Path, ticket_id: str) -> int:
+            code = super().__call__(root, ticket_id)
+            # Move the run branch on after the ticket branched, so the merge
+            # back can no longer fast-forward.
+            (root / "src" / "drift.py").write_text(f"# drifted before {ticket_id}\n")
+            _git(root, "add", "-A")
+            _git(root, "commit", "-qm", "concurrent work")
+            return code
+
+    drive(monkeypatch, repo, ["T1", "T2"], session=DivergingSession())
+
+    log = latest_run_log(repo)
+    assert log["tickets"]["T1"]["status"] == "promoted, merge refused"
+    assert log["tickets"]["T2"]["status"] == "not_run"
+    assert log["breaker"] is None, "no breaker fired here; the merge is what stopped it"
+    assert log["stopped_because"] and "edad/t1" in log["stopped_because"], (
+        f"the log does not name the refused merge: {log['stopped_because']!r}"
+    )
+
+    # And a breaker sets it *alongside* `breaker` rather than instead of it.
+    # `breaker` stays the separate key D9 required; `stopped_because` is the
+    # wider question, the one a merge refusal also answers.
+    state = RunState(plan_run(FOUR_INDEPENDENT, ["T1", "T2", "T3", "T4"], set()), FOUR_INDEPENDENT)
+    state.fail("T1", session_log=ABORTED_WITHOUT_COMMIT)
+    state.fail("T2", session_log=ABORTED_WITHOUT_COMMIT)
+
+    stopped = state.as_log()
+    assert stopped["breaker"] == "no_progress"
+    assert stopped["stopped_because"] and "no_progress" in stopped["stopped_because"], (
+        f"the breaker fired and the log says {stopped['stopped_because']!r}"
+    )
+
+
+def test_a_clean_drain_names_no_stop_reason(monkeypatch, repo):
+    """`None`, rather than a string saying nothing went wrong. The key answers
+    "why did this stop", and a night that drained did not stop - a reader made
+    to parse prose to learn there was no incident is back to correlating by
+    hand, which is the thing D9 exists to end."""
+    code, _, _, _ = drive(monkeypatch, repo, ["T1", "T2"])
+
+    log = latest_run_log(repo)
+    assert code == 0
+    assert log["breaker"] is None
+    assert log["stopped_because"] is None, (
+        f"the queue drained; {log['stopped_because']!r} is not a stop"
+    )

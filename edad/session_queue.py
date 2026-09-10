@@ -54,6 +54,12 @@ from pathlib import Path
 from edad.gate import check_freeze, command_timeout, load_ticket, repo_root, run_commands
 from edad.session import MAX_NO_PROGRESS, PROMOTED_OUTCOMES
 
+# T009 stub. Present so the frozen tests reach their assertions instead of an
+# AttributeError, and consulted by nothing, so they fail there. The bound the
+# final gate should actually run under - and the comment saying which quantity
+# it is not - are what T009 asks for.
+FINAL_GATE_TIMEOUT_S = 900
+
 MAIN_BRANCH = "main"
 # HEAD is the whole memory of a run (D12), so the prefix is what tells a
 # resumable branch from anything else root might be standing on.
@@ -628,6 +634,11 @@ class RunState:
             "elapsed_s": round(self.elapsed_s(), 3),
             "tickets": tickets,
             "breaker": self.breaker,
+            # T009 stub. The key exists so a reader gets a value rather than a
+            # KeyError, and it says the same thing on every path - clean drain,
+            # breaker, merge refused alike - so each of those fails here rather
+            # than passing by accident on the one path it happened to suit.
+            "stopped_because": "unknown",
             "final_gate": self.final_gate,
         }
 
@@ -713,7 +724,7 @@ def print_summary(
 # --- D10: one measured claim at the end -------------------------------------
 
 
-def final_gate_spec(root: Path) -> tuple[list[str], int]:
+def final_gate_spec(root: Path, ticket_ids: Sequence[str]) -> tuple[list[str], int]:
     """What a repo-wide full gate is here, and how long any one command gets.
 
     Taken from the tickets rather than from a second list, for the reason
@@ -723,6 +734,10 @@ def final_gate_spec(root: Path) -> tuple[list[str], int]:
     same tree; the union is every command any of them counts as the gate, and
     the longest declared timeout is the one that does not cut a suite short.
     """
+    # T009 stub. `ticket_ids` arrives and is dropped, and the bound is still the
+    # widest agent-hang budget any ticket on disk declares - wrong on both counts
+    # deliberately. The parameter and the constant exist so the frozen tests get
+    # as far as asserting; what they should return is the agent's to write.
     commands: list[str] = []
     timeout_s = command_timeout({})
     for path in sorted((Path(root) / ".edad" / "tickets").glob("*.md")):
@@ -734,7 +749,7 @@ def final_gate_spec(root: Path) -> tuple[list[str], int]:
     return commands, timeout_s
 
 
-def final_gate(root: Path) -> dict:
+def final_gate(root: Path, ticket_ids: Sequence[str]) -> dict:
     """One full gate on the run branch tip, after the queue drains.
 
     Redundant by derivation from the fast-forward property - ticket N's gate
@@ -747,7 +762,7 @@ def final_gate(root: Path) -> dict:
     against one ticket's approval lock. This asks the plainer question the night
     ends on - is the tree the operator will read in the morning green.
     """
-    commands, timeout_s = final_gate_spec(root)
+    commands, timeout_s = final_gate_spec(root, ticket_ids)
     results = run_commands(root, commands, deny_network=True, timeout_s=timeout_s)
     return {
         "passed": all(c.ok for c in results),
@@ -887,7 +902,7 @@ def work_queue(root: Path, state: RunState, created: Created, run_branch: str) -
             break
         if not work_one(root, ticket_id, state, created, run_branch):
             break
-    state.final_gate = final_gate(root)
+    state.final_gate = final_gate(root, state.plan.order)
     report_final_gate(state.final_gate)
 
 
