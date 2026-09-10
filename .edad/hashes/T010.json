@@ -1,0 +1,44 @@
+{
+  "tests/test_gate_red_proof.py": "954df1d81a0f8fd7342b1df418b78b25350acdd67a6883b3a81aa91d9c20bfc7",
+  "_edad": {
+    "approved_at": "2026-09-10T18:57:21.168708+00:00",
+    "ticket_sha256": "70c1c4582506a96ce1aa569b18b951d691cc1b52d4a09d6cd033e71a6f136e66",
+    "decisions": [
+      "D22"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-10T18:57:20.632167+00:00",
+      "commit": "2902796f33a10588b825b2976374f4506e5cbe0e",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses": 1,
+            "pytest:tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
