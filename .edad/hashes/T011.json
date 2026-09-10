@@ -1,0 +1,149 @@
+{
+  "tests/test_acceptance_converter.py": "8ede006354f6cff85eae1bf33c38949bafb4c6ef94301463a6dc019b62001a72",
+  "_edad": {
+    "approved_at": "2026-09-10T19:36:02.638157+00:00",
+    "ticket_sha256": "3d7bca2a0799eb01863411eb7cf88c76523235157eab1f5f993ce20ef4fe28f8",
+    "decisions": [],
+    "red_proof": null,
+    "mutation_proof": {
+      "commit": "bab9ed3592dc20987216006d1228aa72ab72a67c",
+      "green_at_base": [
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_command_is_pure_and_wellformed -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_output_path_defaults_to_input_stem -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_convert_invokes_runner_with_built_command -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_missing_input_raises_before_invoking_runner -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_missing_ffmpeg_raises_ffmpeg_not_found -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_ffmpeg_failure_raises_conversion_error -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/test_acceptance_converter.py::test_no_real_subprocess_by_default -q",
+          "exit_code": 0
+        }
+      ],
+      "mutations": [
+        {
+          "command": "perl -0pi -e 's/        \"-vn\",\\n//' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_command_is_pure_and_wellformed"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_command_is_pure_and_wellformed -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_command_is_pure_and_wellformed"
+          ]
+        },
+        {
+          "command": "perl -0pi -e 's/source\\.with_suffix\\(\"\\.mp3\"\\)/source.with_suffix(\".m4a\")/' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_output_path_defaults_to_input_stem"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_output_path_defaults_to_input_stem -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_output_path_defaults_to_input_stem"
+          ]
+        },
+        {
+          "command": "perl -0pi -e 's/run\\(command, check=True\\)/run(command, check=False)/' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_convert_invokes_runner_with_built_command"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_convert_invokes_runner_with_built_command -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_convert_invokes_runner_with_built_command"
+          ]
+        },
+        {
+          "command": "perl -0pi -e 's/    if not source\\.is_file\\(\\):\\n        raise InputNotFoundError\\(f\"input file not found: \\{source\\}\"\\)\\n\\n//' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_missing_input_raises_before_invoking_runner"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_missing_input_raises_before_invoking_runner -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_missing_input_raises_before_invoking_runner"
+          ]
+        },
+        {
+          "command": "perl -0pi -e 's/        raise FFmpegNotFoundError\\(/        raise ConversionError(/' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_missing_ffmpeg_raises_ffmpeg_not_found"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_missing_ffmpeg_raises_ffmpeg_not_found -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_missing_ffmpeg_raises_ffmpeg_not_found"
+          ]
+        },
+        {
+          "command": "perl -0pi -e 's/        raise ConversionError\\(/        raise FFmpegNotFoundError(/' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_ffmpeg_failure_raises_conversion_error"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_ffmpeg_failure_raises_conversion_error -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_ffmpeg_failure_raises_conversion_error"
+          ]
+        },
+        {
+          "command": "perl -0pi -e 's/    run = runner if runner is not None else subprocess\\.run\\n/    run = runner\\n    if run is None:\\n        return\\n/' ytmp3/converter.py",
+          "touched": [
+            "ytmp3/converter.py"
+          ],
+          "expects": [
+            "tests/test_acceptance_converter.py::test_no_real_subprocess_by_default"
+          ],
+          "acceptance_command": "python3 -m pytest tests/test_acceptance_converter.py::test_no_real_subprocess_by_default -q",
+          "detected_by": [
+            "tests/test_acceptance_converter.py::test_no_real_subprocess_by_default"
+          ]
+        }
+      ]
+    },
+    "full_gate_baseline": {
+      "taken_at": "2026-09-10T19:35:50.923576+00:00",
+      "commit": "bab9ed3592dc20987216006d1228aa72ab72a67c",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 0,
+          "keys": {}
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
