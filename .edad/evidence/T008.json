@@ -1,0 +1,122 @@
+{
+  "ticket": "T008",
+  "started_at": "2026-09-10T17:24:31.724411+00:00",
+  "commit": "a8d70a2471e6212a6aee7e7e8cc41818ec8c4792",
+  "base_ref": "a8d70a2471e6212a6aee7e7e8cc41818ec8c4792",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 10.47,
+      "output_tail": "........................................................................ [ 42%]\n........................................................................ [ 85%]\n........................                                                 [100%]\n168 passed in 10.31s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.05,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D7",
+    "D8",
+    "D9",
+    "D10"
+  ],
+  "red_proof": null,
+  "mutation_proof": {
+    "commit": "0dcabf28f2533ccfde96cfb85b7baad005c2b696",
+    "green_at_base": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_breaker_is_checked_before_the_ticket_it_would_stop -q",
+        "exit_code": 0
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_ticket_the_breaker_never_reached_is_not_a_failure -q",
+        "exit_code": 0
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_first_failure_to_reach_a_ticket_owns_its_skip -q",
+        "exit_code": 0
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_final_gate_runs_the_commands_the_spec_names -q",
+        "exit_code": 0
+      }
+    ],
+    "mutations": [
+      {
+        "command": "perl -0pi -e \"s/        if state\\.check_breaker\\(\\) is not None:\\n            break\\n        if not work_one\\(root, ticket_id, state, created, run_branch\\):\\n            break/        if not work_one(root, ticket_id, state, created, run_branch):\\n            break\\n        if state.check_breaker() is not None:\\n            break/\" edad/session_queue.py",
+        "touched": [
+          "edad/session_queue.py"
+        ],
+        "expects": [
+          "tests/test_session_queue.py::test_the_breaker_is_checked_before_the_ticket_it_would_stop"
+        ],
+        "acceptance_command": "python3 -m pytest tests/test_session_queue.py::test_the_breaker_is_checked_before_the_ticket_it_would_stop -q",
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_breaker_is_checked_before_the_ticket_it_would_stop"
+        ]
+      },
+      {
+        "command": "perl -0pi -e \"s/log_entry\\(\\\"not_run\\\"\\)/log_entry(\\\"failed\\\")/\" edad/session_queue.py",
+        "touched": [
+          "edad/session_queue.py"
+        ],
+        "expects": [
+          "tests/test_session_queue.py::test_a_ticket_the_breaker_never_reached_is_not_a_failure"
+        ],
+        "acceptance_command": "python3 -m pytest tests/test_session_queue.py::test_a_ticket_the_breaker_never_reached_is_not_a_failure -q",
+        "detected_by": [
+          "tests/test_session_queue.py::test_a_ticket_the_breaker_never_reached_is_not_a_failure"
+        ]
+      },
+      {
+        "command": "perl -0pi -e \"s/            if dependent in self\\.outcomes:\\n                continue\\n//\" edad/session_queue.py",
+        "touched": [
+          "edad/session_queue.py"
+        ],
+        "expects": [
+          "tests/test_session_queue.py::test_the_first_failure_to_reach_a_ticket_owns_its_skip"
+        ],
+        "acceptance_command": "python3 -m pytest tests/test_session_queue.py::test_the_first_failure_to_reach_a_ticket_owns_its_skip -q",
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_first_failure_to_reach_a_ticket_owns_its_skip"
+        ]
+      },
+      {
+        "command": "perl -0pi -e \"s/    commands, timeout_s = final_gate_spec\\(root\\)/    commands, timeout_s = [], 60/\" edad/session_queue.py",
+        "touched": [
+          "edad/session_queue.py"
+        ],
+        "expects": [
+          "tests/test_session_queue.py::test_the_final_gate_runs_the_commands_the_spec_names"
+        ],
+        "acceptance_command": "python3 -m pytest tests/test_session_queue.py::test_the_final_gate_runs_the_commands_the_spec_names -q",
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_final_gate_runs_the_commands_the_spec_names"
+        ]
+      }
+    ]
+  },
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
