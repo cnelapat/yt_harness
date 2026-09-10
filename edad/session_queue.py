@@ -32,6 +32,15 @@ nothing undone - the tip is verified after every merge, so an aborted ticket
 leaves it where the last promotion did, and the only open question is what may
 still run. `RunState` answers it and `run_queue` folds over that answer.
 
+T009 amends three of those rather than patching them, because in all three the
+implementation matched the ticket and the ticket was what was wrong. D23: the
+final gate is bounded by `FINAL_GATE_TIMEOUT_S`, a quantity chosen for it, and
+not by `command_timeout_s`, which bounds how long an agent may hang inside a
+session. D24: D10's gate is the union of the `full_gate` commands of the tickets
+*this run is made of*, not of every `.md` under `.edad/tickets/`. D25: the run
+log's `stopped_because` answers "why did this stop" for every stop, not only for
+D8's two - a queue halted by a merge git refused used to say so on stdout alone.
+
 D13 is unenforced: v1 is sequential. `plan_run` computes `Plan.independent`
 and nothing acts on it, so a later scheduler is a change rather than a
 redesign - and so the wall-clock parallelism would have saved is measurable
@@ -51,13 +60,26 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from edad.gate import check_freeze, command_timeout, load_ticket, repo_root, run_commands
+from edad.gate import check_freeze, load_ticket, repo_root, run_commands
 from edad.session import MAX_NO_PROGRESS, PROMOTED_OUTCOMES
 
-# T009 stub. Present so the frozen tests reach their assertions instead of an
-# AttributeError, and consulted by nothing, so they fail there. The bound the
-# final gate should actually run under - and the comment saying which quantity
-# it is not - are what T009 asks for.
+# D23. How long any one command of the final gate may run.
+#
+# This is NOT `command_timeout_s`. That is a `kill_conditions` entry and it
+# bounds how long an *agent* may hang inside a session; the final gate is a
+# suite the controller runs with no agent anywhere in it. Borrowing the agent's
+# number means a ticket that raised its own - as T006 did, for measured reasons
+# entirely about the agent - silently changes how long the night's last gate may
+# take. Two quantities under one name is how a wall-clock budget stops meaning
+# anything: the operator sets a bound, the queue honours it, and the epilogue
+# then runs on a bound nobody chose.
+#
+# Fifteen minutes, chosen against what a `full_gate` is: a repo-wide test run
+# and a linter, which take seconds here, so this is slack for a slow machine
+# rather than an estimate. It is a constant rather than a flag because the
+# quantity is a property of the gate, not of the night: an operator who wants a
+# shorter night sets `--budget-hours`, which bounds the queue, and cutting the
+# final gate short would forfeit the measurement instead of saving time.
 FINAL_GATE_TIMEOUT_S = 900
 
 MAIN_BRANCH = "main"
@@ -536,6 +558,14 @@ class RunState:
     that conflated the two would send the operator to debug a ticket that never
     ran. Those tickets are in the log too, as `not_run` - being able to say
     which ones the night never got to is the other half of the same distinction.
+
+    `stopped_because` (D25) is the wider question `breaker` only half answers.
+    A queue stopped by a merge git refused logs the ticket `promoted, merge
+    refused`, everything behind it `not_run`, and `breaker: null` - three true
+    statements that never say why. It sits *alongside* `breaker` rather than
+    replacing it, because a reader still needs to tell the two breakers from
+    everything else; it is `None` on a clean drain, because a night that drained
+    did not stop.
     """
 
     def __init__(self, plan: Plan, tickets: dict[str, dict], budget_s: float | None = None):
@@ -549,6 +579,7 @@ class RunState:
         self.started = time.monotonic()
         self.skipped: dict[str, str] = {}
         self.breaker: str | None = None
+        self.stopped_because: str | None = None
         self.outcomes: dict[str, dict] = {}
         self.no_commit_aborts = 0
         self.final_gate: dict | None = None
@@ -581,6 +612,16 @@ class RunState:
                     frontier.append(queued)
         return [t for t in self.plan.order if t in reached]
 
+    def stop(self, reason: str) -> None:
+        """Why the night stopped, recorded once.
+
+        First cause wins, for `breaker`'s reason: whatever actually stopped the
+        queue is what the morning needs, and a later reading overwriting it
+        renames the cause after the fact.
+        """
+        if self.stopped_because is None:
+            self.stopped_because = reason
+
     def check_breaker(self) -> str | None:
         """The first breaker to fire wins and stands: re-deciding each time
         would let a later reading rename the reason the night stopped."""
@@ -590,6 +631,8 @@ class RunState:
                 elapsed_s=self.elapsed_s(),
                 budget_s=self.budget_s,
             )
+            if self.breaker is not None:
+                self.stop(f"breaker {self.breaker} fired; the queue stopped")
         return self.breaker
 
     def promote(self, ticket_id: str, merge_sha: str) -> None:
@@ -634,11 +677,7 @@ class RunState:
             "elapsed_s": round(self.elapsed_s(), 3),
             "tickets": tickets,
             "breaker": self.breaker,
-            # T009 stub. The key exists so a reader gets a value rather than a
-            # KeyError, and it says the same thing on every path - clean drain,
-            # breaker, merge refused alike - so each of those fails here rather
-            # than passing by accident on the one path it happened to suit.
-            "stopped_because": "unknown",
+            "stopped_because": self.stopped_because,
             "final_gate": self.final_gate,
         }
 
@@ -669,6 +708,19 @@ def read_new_log(before: set[Path], after: set[Path]) -> tuple[str | None, dict 
 # --- the driver -------------------------------------------------------------
 
 
+def merge_refusal_reason(branch: str, run: str) -> str:
+    """The one sentence the screen and the run log both carry (D25).
+
+    One expression rather than two, for the reason `evidence_path` is one: the
+    operator correlating a printed refusal against `.edad/runs/` at 8am must not
+    have to decide whether two differently-worded lines are the same event.
+    Git's own diagnosis stays on screen only - it is many lines and it is
+    already captured in the session's own output - and what the log gets is
+    which merge refused.
+    """
+    return f"{branch} would not fast-forward onto {run}"
+
+
 def report_merge_refusal(branch: str, run: str, merge: subprocess.CompletedProcess) -> None:
     """Git's own words, verbatim.
 
@@ -679,7 +731,7 @@ def report_merge_refusal(branch: str, run: str, merge: subprocess.CompletedProce
     while the real cause - one uncommitted edit - is the one thing not on
     screen.
     """
-    print(f"\n{branch} would not fast-forward onto {run}. git said:")
+    print(f"\n{merge_refusal_reason(branch, run)}. git said:")
     if merge.stdout.strip():
         print(merge.stdout.rstrip())
     if merge.stderr.strip():
@@ -725,28 +777,31 @@ def print_summary(
 
 
 def final_gate_spec(root: Path, ticket_ids: Sequence[str]) -> tuple[list[str], int]:
-    """What a repo-wide full gate is here, and how long any one command gets.
+    """What a repo-wide full gate is for *this run*, and how long a command gets.
 
     Taken from the tickets rather than from a second list, for the reason
     ordering is taken from `blocked_by`: a gate definition kept beside the one
     the tickets already carry is a place for the two to disagree. `full_gate`
     runs repo-wide by construction, so every ticket's list is a claim about the
-    same tree; the union is every command any of them counts as the gate, and
-    the longest declared timeout is the one that does not cut a suite short.
+    same tree, and the union is every command any of them counts as the gate.
+
+    D24: "the tickets" means the ones the run is made of, not every `.md` under
+    `.edad/tickets/`. Today all of them declare the same two commands, so the
+    difference is invisible; the first ticket to declare a third would otherwise
+    join the final gate of every run that does not include it, and the night
+    would end measuring a claim about code it never touched.
+
+    First-seen order across `ticket_ids`, deduplicated - so the gate reads in
+    the order the queue ran, and asking for the same run twice cannot reorder it.
+    The ids are a parameter rather than something read off a `RunState`, which
+    keeps this as testable as it was when it globbed.
     """
-    # T009 stub. `ticket_ids` arrives and is dropped, and the bound is still the
-    # widest agent-hang budget any ticket on disk declares - wrong on both counts
-    # deliberately. The parameter and the constant exist so the frozen tests get
-    # as far as asserting; what they should return is the agent's to write.
     commands: list[str] = []
-    timeout_s = command_timeout({})
-    for path in sorted((Path(root) / ".edad" / "tickets").glob("*.md")):
-        ticket = load_ticket(root, path.stem)
-        timeout_s = max(timeout_s, command_timeout(ticket))
-        for command in ticket.get("full_gate") or []:
+    for ticket_id in ticket_ids:
+        for command in load_ticket(root, ticket_id).get("full_gate") or []:
             if command not in commands:
                 commands.append(command)
-    return commands, timeout_s
+    return commands, FINAL_GATE_TIMEOUT_S
 
 
 def final_gate(root: Path, ticket_ids: Sequence[str]) -> dict:
@@ -882,6 +937,12 @@ def work_one(root: Path, ticket_id: str, state: RunState, created: Created, run:
     )
     if merge.returncode != 0:
         state.record(ticket_id, "promoted, merge refused")
+        # Recorded where it is reported, and from the same expression, so the
+        # file and the screen cannot end up carrying different sentences about
+        # the same refusal. No breaker fires here - this is not one of D8's two
+        # - which is exactly why `breaker` alone left the run log unable to say
+        # why the queue stopped.
+        state.stop(merge_refusal_reason(branch, run))
         report_merge_refusal(branch, run, merge)
         return False
     state.promote(ticket_id, git(root, "rev-parse", "HEAD"))
