@@ -1,0 +1,70 @@
+{
+  "tests/test_session_queue.py": "9d4ab3e8e931223022a555d35f294047b656fc60e6ef502a26daef4f1be73a43",
+  "_edad": {
+    "approved_at": "2026-09-10T18:04:03.534532+00:00",
+    "ticket_sha256": "ec96e97bf4969dca099467e223249cff1c7d5c6dcc3afedbf838c5b64daaad54",
+    "decisions": [
+      "D23",
+      "D24",
+      "D25"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_final_gate_timeout_is_its_own_bound -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_final_gate_timeout_is_its_own_bound"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_final_gate_spec_unions_only_the_queued_tickets -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_final_gate_spec_unions_only_the_queued_tickets"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_ticket_outside_the_run_cannot_widen_the_final_gate -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_a_ticket_outside_the_run_cannot_widen_the_final_gate"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_run_log_names_why_the_queue_stopped -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_run_log_names_why_the_queue_stopped"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_clean_drain_names_no_stop_reason -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_a_clean_drain_names_no_stop_reason"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-10T18:04:00.391006+00:00",
+      "commit": "a136e10f134c7a250eba9fd845a3cece924d6ece",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_session_queue.py::test_final_gate_timeout_is_its_own_bound": 1,
+            "pytest:tests/test_session_queue.py::test_final_gate_spec_unions_only_the_queued_tickets": 1,
+            "pytest:tests/test_session_queue.py::test_a_ticket_outside_the_run_cannot_widen_the_final_gate": 1,
+            "pytest:tests/test_session_queue.py::test_the_run_log_names_why_the_queue_stopped": 1,
+            "pytest:tests/test_session_queue.py::test_a_clean_drain_names_no_stop_reason": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
