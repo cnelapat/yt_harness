@@ -430,4 +430,37 @@ decisions:
     unenforced: "A forward-compatibility decision. The only assertable half is that the run log carries the independent set, which D9's shape covers; 'do not hardcode against parallelism' is a design constraint with no behaviour to test. Recorded so a later session reads the sequential design as a choice rather than an oversight."
     seam: run-log (via D9; nothing separately asserted)
     rejected: "building parallelism in v1 (destroys --ff-only, needs a 3am conflict policy, demotes continuous verification to a single end-of-run check); and rejecting it permanently, which would make the independence data pointless to record"
+
+  # Added after T006's review. D7-D10 shipped correct against their tickets;
+  # these three amend what those tickets did not say. Numbering continues the
+  # global ledger - D14-D22 are `.edad/specs/mutation-proof.md`'s.
+
+  - id: D23
+    decision: "The final gate's per-command timeout is a constant chosen for it, `FINAL_GATE_TIMEOUT_S`, not `max(command_timeout_s)` across the tickets. `command_timeout_s` is a `kill_conditions` entry bounding how long an agent may hang inside a session; the final gate is a test suite the controller runs with no agent in it. Borrowing the agent's hang bound lets a ticket that raised its own timeout for reasons entirely about the agent silently change how long the night's last gate may take."
+    verify:
+      - python3 -m pytest tests/test_session_queue.py::test_final_gate_timeout_is_its_own_bound -q
+    frozen:
+      - tests/test_session_queue.py
+    seam: final-gate
+    rejected: "skipping the final gate once a breaker has fired - trades D10's measured claim for the derivation precisely where the derivation is weakest, which is a night that went badly"
+
+  - id: D24
+    decision: "`final_gate_spec` unions `full_gate` across the tickets in this run, taking the ids as an argument, rather than globbing every ticket on disk. Taking the gate from the tickets rather than a second list is D10's reason and stands; `the tickets` means the ones the run is made of."
+    verify:
+      - python3 -m pytest tests/test_session_queue.py::test_final_gate_spec_unions_only_the_queued_tickets -q
+      - python3 -m pytest tests/test_session_queue.py::test_a_ticket_outside_the_run_cannot_widen_the_final_gate -q
+    frozen:
+      - tests/test_session_queue.py
+    seam: final-gate
+    rejected: "a separate gate definition in the controller - the disagreement D10 rejected; and reading the ids off RunState, which costs the function its testability for nothing"
+
+  - id: D25
+    decision: "The run log carries `stopped_because`: null on a clean drain, otherwise a short string naming the cause. A breaker sets it alongside `breaker` rather than instead of it, and a merge git refused sets it too. D9 made `breaker` a separate key from `tickets` so the operator is not sent to debug a ticket that never ran; a stop that is not a breaker leaves that same operator with `breaker: null`, everything behind it `not_run`, and the reason on stdout only."
+    verify:
+      - python3 -m pytest tests/test_session_queue.py::test_the_run_log_names_why_the_queue_stopped -q
+      - python3 -m pytest tests/test_session_queue.py::test_a_clean_drain_names_no_stop_reason -q
+    frozen:
+      - tests/test_session_queue.py
+    seam: run-log
+    rejected: "widening `breaker` to carry non-breaker stops - conflates the two things D8 and D9 spent a decision separating; and leaving the reason on stdout, which is the scatter-to-correlate-at-8am that D9 replaced"
 ```
