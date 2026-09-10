@@ -831,6 +831,11 @@ def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[dict
     `FAILED <file>::<test> - NotImplementedError`; a test that asserts nothing
     then goes green instead, and the all-pass refusal below catches it.
 
+    Every pytest command must also name a node id (D22). A whole-file command
+    meets the bar above on the strength of however many tests in the file happen
+    to assert and leaves the rest unexamined, so it is refused - before the
+    detection refusals, because one that produced a real FAILED satisfies them.
+
     Returns one {command, exit_code, detected_by} dict per failing command, in
     acceptance order, which cmd_approve writes into the lock verbatim. Detection
     is computed here, where the output is read, rather than recomputed at the
@@ -864,6 +869,38 @@ def prove_red_or_die(root: Path, ticket: dict, commands: list[str]) -> list[dict
             "either they assert nothing, or the implementation already exists. "
             "Approval happens before the work. Re-run with --allow-passing only "
             "if you are deliberately re-approving a ticket already implemented."
+        )
+
+    # D22. Every pytest command must name a node id. A whole-file command
+    # discharges the bar below on the strength of however many tests in the file
+    # happen to carry assertions, and stays silent about the ones beside them -
+    # the author never learns which were which.
+    #
+    # Ordered before the detection refusals, and that ordering is the substance
+    # rather than a detail: a whole-file command that produced a real FAILED
+    # passes D15 cleanly, so running this second would never reach it on exactly
+    # the input it exists to catch.
+    #
+    # The red tier only. The mutation tier names node ids in `expects` and
+    # `unfired_expectations` holds every one of them to firing, so a whole-file
+    # command is already pinned there to the tests that must catch each
+    # perturbation. The red tier has no `expects` - a second collection pass was
+    # rejected as the alternative - so the command string is the only place a node
+    # id can be named, and a whole-file command is genuinely unexamined rather
+    # than merely terse.
+    #
+    # On the union of offenders, so a compliant sibling beside one is not blamed
+    # and an author who fixes one command per approve is not made to: D6's shape
+    # for `expects` and D7's for survivors.
+    unselective = [c for c in commands if _supplies_detection(c) and not _names_node_id(c)]
+    if unselective:
+        die(
+            "these acceptance command(s) name no pytest node id: "
+            + "; ".join(repr(c) for c in unselective)
+            + ". A whole-file run reports FAILED for the tests in the file that "
+            "assert and says nothing about the vacuous ones beside them, so the red "
+            "proof is discharged while those are never examined. Select each test "
+            "by node id - `<path>::<test>` - one command per test."
         )
 
     # D16, the red tier's half of D8's rule. A linter goes red on a module that
@@ -1112,6 +1149,41 @@ def _supplies_detection(command: str) -> bool:
     except ValueError:
         tokens = command.split()
     return any(t == "pytest" or t.endswith("/pytest") for t in tokens)
+
+
+def _names_node_id(command: str) -> bool:
+    """Whether this command selects at least one pytest node id.
+
+    A second, narrower question beside `_supplies_detection`, not a refinement of
+    it. That one answers "could this report a pytest FAILED", which is what D16
+    and the `detected_by` recording still need; folding the two would make a
+    whole-file command look like a non-pytest command, and D16 would then refuse
+    an all-whole-file set with "no command can supply the red proof" - blaming the
+    author for the wrong thing.
+
+    Tokenised rather than substring-matched on the raw command: `::` inside a -k
+    expression or a quoted path is not a node-id selector, and tokenising is what
+    `_supplies_detection` already does one line away. Same ValueError fallback,
+    for the same reason - an unbalanced quote is not grounds to guess.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    skip_next = False
+    for t in tokens:
+        # -k's value is an expression, not a selector, and it is the one place a
+        # `::` can legitimately appear without naming a test. Only -k: pytest's
+        # -m takes marker names, and `python3 -m pytest` would collide with it.
+        if skip_next:
+            skip_next = False
+            continue
+        if t == "-k":
+            skip_next = True
+            continue
+        if not t.startswith("-") and "::" in t:
+            return True
+    return False
 
 
 def prove_mutation_or_die(root: Path, ticket: dict, commands: list[str]) -> dict:
