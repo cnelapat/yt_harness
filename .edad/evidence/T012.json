@@ -1,0 +1,62 @@
+{
+  "ticket": "T012",
+  "started_at": "2026-09-10T19:48:02.131913+00:00",
+  "commit": "cc894b029da3b9d26b407a955851acdfce71b2be",
+  "base_ref": "be37af51648fecb37beba8e305599fcd8e809c99",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/gate.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 12.9,
+      "output_tail": "........................................................................ [ 40%]\n........................................................................ [ 81%]\n.................................                                        [100%]\n177 passed in 12.53s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D23"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_gate_mutation.py::test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_gate_mutation.py::test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_mutation.py::test_the_stale_pattern_refusal_precedes_detection -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_gate_mutation.py::test_the_stale_pattern_refusal_precedes_detection"
+      ]
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
