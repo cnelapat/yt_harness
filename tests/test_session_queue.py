@@ -805,3 +805,108 @@ def test_final_gate_result_is_in_the_run_log(monkeypatch, repo):
     log = json.loads(logs[-1].read_text())
 
     assert log["final_gate"]["passed"] is True
+
+
+# --- T008: teeth for D7-D10 -------------------------------------------------
+#
+# Characterization, not new behaviour. T006's ten acceptance tests all pass
+# against a `session_queue` in which the breaker is checked after the ticket it
+# was meant to prevent, a ticket the breaker never reached is logged `failed`,
+# a second failure re-attributes the first one's skips, and the final gate runs
+# no commands at all. Each was measured surviving all ten. These four pin the
+# four behaviours those mutations reach, and the `mutation:` block on T008 is
+# what proves they bite rather than merely run.
+
+# Four tickets that block on nothing, so a breaker can fire with some of them
+# still untouched. CHAIN cannot express that: failing any of its members skips
+# the rest, and a run with nothing left unreached cannot tell `not_run` from
+# `failed` no matter what it asserts.
+FOUR_INDEPENDENT = tickets(("T1", ()), ("T2", ()), ("T3", ()), ("T4", ()))
+
+
+def test_the_breaker_is_checked_before_the_ticket_it_would_stop(monkeypatch, repo):
+    """Before, not after. Firing it after spawning the session it existed to
+    prevent spends exactly the hour the budget was set to save - and a run that
+    checks afterwards still reports the right breaker, so only the session count
+    can tell the two apart."""
+    code, session, _, _ = drive(monkeypatch, repo, ["T1", "T2"], budget_s=0)
+
+    assert session.ran == [], f"the breaker fired but {session.ran} ran anyway"
+    assert code != 0
+
+
+def test_a_ticket_the_breaker_never_reached_is_not_a_failure(monkeypatch, repo):
+    """The other half of D8's distinction. `test_breaker_firing_is_recorded_
+    distinctly_from_a_ticket_failure` fails every ticket in its chain, so it
+    never constructs one the night did not get to - and a log that called those
+    `failed` would send the operator to debug a ticket that never ran."""
+    state = RunState(plan_run(FOUR_INDEPENDENT, ["T1", "T2", "T3", "T4"], set()), FOUR_INDEPENDENT)
+
+    state.fail("T1", session_log=ABORTED_WITHOUT_COMMIT)
+    state.fail("T2", session_log=ABORTED_WITHOUT_COMMIT)
+
+    log = state.as_log()
+    assert log["breaker"] == "no_progress"
+    assert state.remaining() == ["T3", "T4"]
+    for untouched in ("T3", "T4"):
+        assert log["tickets"][untouched]["status"] == "not_run", (
+            f"{untouched} never ran; logging it as "
+            f"{log['tickets'][untouched]['status']!r} sends the morning to debug it"
+        )
+
+
+def test_the_first_failure_to_reach_a_ticket_owns_its_skip(monkeypatch, repo):
+    """First cause wins. A later failure that also reaches T3 must not rename
+    the reason, and must not overwrite T2's own failure with a skip - the
+    morning would then be told T2 never ran when in fact it is the thing that
+    broke."""
+    state = RunState(plan_run(CHAIN, ["T1", "T2", "T3", "T4"], set()), CHAIN)
+
+    state.fail("T2")
+    state.fail("T1")
+
+    log = state.as_log()
+    assert log["tickets"]["T2"]["status"] == "failed", "T2 failed; a later skip erased it"
+    assert state.skipped["T3"] == skip_reason("T2"), "T3's reason was re-attributed to T1"
+
+
+class _FakeResult:
+    """What `run_commands` hands back, in the fields `final_gate` reads."""
+
+    def __init__(self, command: str, exit_code: int = 0):
+        self.command = command
+        self.exit_code = exit_code
+        self.ok = exit_code == 0
+        self.duration_s = 0.0
+        self.timed_out = False
+        self.output_tail = ""
+
+
+def test_the_final_gate_runs_the_commands_the_spec_names(monkeypatch, repo):
+    """D10 is a measured claim, and nothing in T006 measured it: `drive`
+    replaces `final_gate` wholesale, so a body that ran no commands at all
+    reported `passed: True` - `all([])` - through the whole suite and `ruff`.
+    This pins the wiring and the verdict."""
+    declared = ["python3 -m pytest -q", "ruff check ."]
+    seen: list[list[str]] = []
+
+    def fake_run_commands(root, commands, **kw):
+        seen.append(list(commands))
+        return [_FakeResult(c) for c in commands]
+
+    monkeypatch.setattr(sq, "final_gate_spec", lambda root: (list(declared), 900))
+    monkeypatch.setattr(sq, "run_commands", fake_run_commands)
+
+    gate = sq.final_gate(repo)
+
+    assert seen == [declared], f"the final gate ran {seen} rather than the spec's commands"
+    assert [c["command"] for c in gate["commands"]] == declared
+    assert gate["passed"] is True
+
+    # And the verdict is the results', not a constant: one red command is a red
+    # gate, which is the only case report_final_gate exists for.
+    seen.clear()
+    monkeypatch.setattr(
+        sq, "run_commands", lambda root, commands, **kw: [_FakeResult(commands[0], 1)]
+    )
+    assert sq.final_gate(repo)["passed"] is False
