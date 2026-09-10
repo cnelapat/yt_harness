@@ -145,11 +145,10 @@ def test_error_only_red_proof_refuses_approval(monkeypatch, capsys):
         prove_red_or_die(ROOT, ticket(), [ACC])
     refused(capsys, ACC, "FAILED")
 
-    whole_file = f"python3 -m pytest {FROZEN} -q"
-    monkeypatch.setattr(gate, "run_commands", FakeRun({whole_file: (2, errored(FROZEN), False)}))
-    with pytest.raises(SystemExit):
-        prove_red_or_die(ROOT, ticket(acceptance=[whole_file]), [whole_file])
-    refused(capsys, whole_file, "FAILED")
+    # The exit-2 whole-file shape this test used to cover a second time now
+    # refuses one rule earlier, for naming no node id at all, and is pinned by
+    # `test_whole_file_pytest_command_refuses` below. Checking it here would
+    # assert the node-id refusal's wording while claiming to be about teeth.
 
 
 def test_failed_at_a_frozen_node_id_is_a_red_proof(monkeypatch):
@@ -161,6 +160,62 @@ def test_failed_at_a_frozen_node_id_is_a_red_proof(monkeypatch):
     entries = prove_red_or_die(ROOT, ticket(), [ACC])
 
     assert entries == [{"command": ACC, "exit_code": 1, "detected_by": [NODE]}]
+
+
+def test_whole_file_pytest_command_refuses(monkeypatch, capsys):
+    """D22. A whole-file command is refused even when it is maximally red.
+
+    The fixture hands it a genuine FAILED at *both* frozen node ids, so D15 is
+    satisfied and the existing bar has no complaint: the only thing left to
+    refuse on is that the command names no node id. That is what gives this test
+    teeth. Had it supplied an ERROR instead, D15 would refuse it today and the
+    test would pass against an unamended gate while proving nothing about D22.
+
+    What the command leaves unexamined is the rest of the file. It reports FAILED
+    for the tests in it that assert, and stays silent about the vacuous ones
+    beside them - so a file of twenty tests discharges the bar on the strength of
+    however many happen to have assertions, and the author never learns which.
+    """
+    whole_file = f"python3 -m pytest {FROZEN} -q"
+    monkeypatch.setattr(
+        gate, "run_commands",
+        FakeRun({whole_file: (1, failed(NODE, OTHER), False)}),
+    )
+
+    with pytest.raises(SystemExit):
+        prove_red_or_die(ROOT, ticket(acceptance=[whole_file]), [whole_file])
+
+    refused(capsys, whole_file, "node id")
+
+
+def test_node_id_command_is_accepted_and_names_the_offender(monkeypatch, capsys):
+    """D22's other half: the refusal is per command, on the union of offenders.
+
+    A node-id command is accepted, and a mixed set is refused naming only the
+    whole-file command - not the compliant sibling beside it. Blaming the set
+    would send an author to audit commands that are already correct, and
+    refusing on the first offender alone makes a twelve-command ticket take
+    twelve approves to fix, the shape D6 rejected for `expects`.
+    """
+    whole_file = f"python3 -m pytest {FROZEN} -q"
+    table = {
+        ACC: (1, failed(NODE), False),
+        ACC2: (1, failed(OTHER), False),
+        whole_file: (1, failed(NODE, OTHER), False),
+    }
+
+    # Accepted: every pytest command names a node id.
+    monkeypatch.setattr(gate, "run_commands", FakeRun(table))
+    entries = prove_red_or_die(ROOT, ticket(acceptance=[ACC, ACC2]), [ACC, ACC2])
+    assert [e["command"] for e in entries] == [ACC, ACC2]
+
+    # Refused, and it names the offender without blaming the sibling.
+    monkeypatch.setattr(gate, "run_commands", FakeRun(table))
+    with pytest.raises(SystemExit):
+        prove_red_or_die(ROOT, ticket(acceptance=[ACC, whole_file]), [ACC, whole_file])
+
+    err = not_named(capsys, ACC)
+    assert whole_file in err, f"the refusal did not name {whole_file!r}:\n{err}"
 
 
 def test_failed_outside_the_frozen_files_does_not_supply_the_red_proof(monkeypatch, capsys):
