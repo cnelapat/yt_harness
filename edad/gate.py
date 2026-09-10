@@ -1259,6 +1259,20 @@ def prove_mutation_or_die(root: Path, ticket: dict, commands: list[str]) -> dict
                 )
 
             touched = mutation_touched_paths(wt)
+            # D9's third way in, and ordered with the other two for the same
+            # reason. A pattern whose source has moved exits 0 and matches
+            # nothing; the worktree stays at HEAD, the acceptance commands pass
+            # there as they did at base, and the survivor refusal fires against
+            # a test that is perfectly fine. `touched` is what says otherwise,
+            # and it is already in hand before anything is measured.
+            if not touched:
+                die(
+                    f"the mutation command {entry.command!r} changed no files. It "
+                    "exited 0 and matched nothing, so the worktree is still at "
+                    "HEAD and there is nothing to detect. The pattern is stale, "
+                    "not the test - fix the pattern."
+                )
+
             strays = [
                 p for p in touched if not any(match_scope(pat, p) for pat in scope)
             ]
