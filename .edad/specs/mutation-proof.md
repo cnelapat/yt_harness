@@ -384,6 +384,16 @@ Carried from `.edad/grills/mutation-proof.md` (D1-D14) and
 `.edad/grills/red-proof-teeth.md` (D15-D22) verbatim — copied, not retyped, and
 verified byte-identical apart from the `seam:` line added to each entry.
 
+**D23 has no grill record**, and the difference is recorded here rather than
+left to be assumed from the heading. It was authored directly from a defect
+found while hand-verifying T011's seven mutation patterns: D9 refuses a mutation
+command that fails, but not one that succeeds while matching nothing, so that
+case fell through to D7 and was reported as the frozen test having no teeth.
+Writing a grill record after the fact would fabricate provenance for a decision
+that came from a measurement, which is the one thing this spec's own rules exist
+to prevent. Precedent for amending a spec directly on a defect of this shape is
+the T004 review (D11's unworkable discard command).
+
 ```yaml
 decisions:
   - id: D1
@@ -610,6 +620,18 @@ decisions:
       - edad/gate.py
     seam: red-proof-gate
     rejected: "collecting the frozen file's tests and requiring every one to appear in detected_by - it admits whole-file commands, and buys that with a second pytest subprocess at approve time and a new failure mode when collection itself errors. Node-id scoping is what T003 through T007 already do."
+  - id: D23
+    decision: "A mutation command that exits 0 while changing no files refuses approval, named as a pattern that matched nothing rather than as a survivor. `touched` is already computed for the scope check and is the evidence; the empty list was never read."
+    verify:
+      - python3 -m pytest tests/test_gate_mutation.py::test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern -q
+      - python3 -m pytest tests/test_gate_mutation.py::test_the_stale_pattern_refusal_precedes_detection -q
+    frozen:
+      - tests/test_gate_mutation.py
+    scope:
+      - edad/gate.py
+    seam: mutation-gate
+    rejected: "re-wording D7's survivor refusal to mention a stale pattern as one possibility - it still measures detection against unperturbed code first, so the lock would carry a real measurement of nothing, and it makes every genuine survivor's message hedge about a cause the gate can already rule out. Also rejected: comparing the worktree HEAD to the root HEAD instead of reading `touched`, which answers the same question with a second git call and misses a mutation that edits and reverts."
+
 deferred:
   - "Coverage is not measured and cannot be, given author-chosen mutations. Disclosed via report()'s shape line (D11) rather than enforced. Revisit only alongside generated mutations."
   - "Nothing verifies the characterization test still has teeth against the refactored code. Follows from D14 and is the price of it."

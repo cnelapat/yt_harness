@@ -443,6 +443,56 @@ def test_failing_mutation_command_refuses(monkeypatch, capsys):
     assert ACC not in run.ran_in_worktree(), "measured detection after a failed mutation"
 
 
+# --- D23: a pattern that matched nothing is a stale pattern, not a survivor ----
+# D9's third case, and placed with it rather than at the end of the file: a
+# mutation that exits 0 while perturbing nothing did not apply either, and the
+# grouping is what keeps it reading as one rule with three ways in.
+
+
+def test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern(monkeypatch, capsys):
+    """The failure mode this closes is a misdiagnosis, not a missed refusal.
+
+    A `perl` pattern that no longer matches the source exits 0, perturbs nothing,
+    and leaves the worktree at HEAD - where the acceptance commands pass, exactly
+    as they do at base. Without this check that reads as "no frozen test caught
+    the mutation", so the gate refuses the approval and blames the *test* for
+    having no teeth. The test is fine; the pattern is stale. An author sent to
+    rewrite a working test by a message naming the wrong culprit is worse served
+    than one given no message at all.
+
+    `touched` is the evidence, and it is already computed one block above for the
+    scope check - the empty list was simply never read.
+    """
+    run = FakeRun({ACC: (0, "", False)}, {SED: (0, "", False), ACC: (0, "1 passed\n", False)})
+    install(monkeypatch, run, touched=[])
+
+    with pytest.raises(SystemExit):
+        prove_mutation_or_die(ROOT, ticket(), [ACC])
+
+    refused(capsys, SED, "changed no files")
+
+
+def test_the_stale_pattern_refusal_precedes_detection(monkeypatch, capsys):
+    """Ordered with D9's two, before any acceptance command runs in the worktree.
+
+    Refusing afterwards would reach the same verdict by the wrong route: the
+    survivor refusal would have already been the thing that fired, and the lock
+    would carry a measurement taken against unperturbed code. The word `survived`
+    is pinned as absent because that is the misdiagnosis itself - a refusal that
+    says it while meaning a stale pattern has only changed which sentence is
+    wrong.
+    """
+    run = FakeRun({ACC: (0, "", False)}, {SED: (0, "", False), ACC: (0, "1 passed\n", False)})
+    install(monkeypatch, run, touched=[])
+
+    with pytest.raises(SystemExit):
+        prove_mutation_or_die(ROOT, ticket(), [ACC])
+
+    err = capsys.readouterr().err
+    assert "survived" not in err, f"the refusal blamed the test as a survivor:\n{err}"
+    assert ACC not in run.ran_in_worktree(), "measured detection after a no-op mutation"
+
+
 # --- D10: the lock records what satisfied the gate, not that it was satisfied --
 
 
