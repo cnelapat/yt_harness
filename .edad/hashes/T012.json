@@ -1,0 +1,44 @@
+{
+  "tests/test_gate_mutation.py": "ea94e7e72ba70bdce529497f8054c5d837b361cfe6b6cada2effe5d227297254",
+  "_edad": {
+    "approved_at": "2026-09-10T19:46:22.779710+00:00",
+    "ticket_sha256": "fa0410820ee37ea7242026c10778cb56d683ed9e871c462e180daa0413d74d38",
+    "decisions": [
+      "D23"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_gate_mutation.py::test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_gate_mutation.py::test_the_stale_pattern_refusal_precedes_detection -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_gate_mutation.py::test_the_stale_pattern_refusal_precedes_detection"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-10T19:46:22.305031+00:00",
+      "commit": "f81cbb83241803686c976e0142dbe4157159768e",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_gate_mutation.py::test_a_mutation_that_changed_nothing_refuses_as_a_stale_pattern": 1,
+            "pytest:tests/test_gate_mutation.py::test_the_stale_pattern_refusal_precedes_detection": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
