@@ -1,8 +1,8 @@
 {
-  "tests/test_session_queue.py": "daf13fa765645df3a18048f4b92c5fa5663d7b88bc5c4fa5b7dfeecbb33e0910",
+  "tests/test_session_queue.py": "9d4ab3e8e931223022a555d35f294047b656fc60e6ef502a26daef4f1be73a43",
   "_edad": {
-    "approved_at": "2026-09-10T17:18:47.005815+00:00",
-    "ticket_sha256": "1100d16170f6204835eadb24b64b08f9daf4114b5fc93adfb1713b086051252c",
+    "approved_at": "2026-09-10T18:11:18.982235+00:00",
+    "ticket_sha256": "2a0d7540cf7df5bf29f9fbb1c4e3b677f79768c97e312eb73dad7c378eebcaaa",
     "decisions": [
       "D7",
       "D8",
@@ -11,7 +11,7 @@
     ],
     "red_proof": null,
     "mutation_proof": {
-      "commit": "0dcabf28f2533ccfde96cfb85b7baad005c2b696",
+      "commit": "6a60171196dcbf7f7f7a0833c170896a86fcc603",
       "green_at_base": [
         {
           "command": "python3 -m pytest tests/test_session_queue.py::test_the_breaker_is_checked_before_the_ticket_it_would_stop -q",
@@ -71,7 +71,7 @@
           ]
         },
         {
-          "command": "perl -0pi -e \"s/    commands, timeout_s = final_gate_spec\\(root\\)/    commands, timeout_s = [], 60/\" edad/session_queue.py",
+          "command": "perl -0pi -e \"s/    commands, timeout_s = final_gate_spec\\(root, ticket_ids\\)/    commands, timeout_s = [], 60/\" edad/session_queue.py",
           "touched": [
             "edad/session_queue.py"
           ],
@@ -86,8 +86,8 @@
       ]
     },
     "full_gate_baseline": {
-      "taken_at": "2026-09-10T17:18:40.504034+00:00",
-      "commit": "0dcabf28f2533ccfde96cfb85b7baad005c2b696",
+      "taken_at": "2026-09-10T18:11:10.570582+00:00",
+      "commit": "6a60171196dcbf7f7f7a0833c170896a86fcc603",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 0,
