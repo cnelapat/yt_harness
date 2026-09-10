@@ -1,0 +1,85 @@
+{
+  "ticket": "T009",
+  "started_at": "2026-09-10T18:09:08.779138+00:00",
+  "commit": "d15a808c2d97c9d21184ec7ece4c6a22ec1ef803",
+  "base_ref": "20e3de30090d3f87cc19bbe23d3b895dc47aa750",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/session_queue.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 13.93,
+      "output_tail": "........................................................................ [ 41%]\n........................................................................ [ 83%]\n.............................                                            [100%]\n173 passed in 13.71s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D23",
+    "D24",
+    "D25"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_final_gate_timeout_is_its_own_bound -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_final_gate_timeout_is_its_own_bound"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_final_gate_spec_unions_only_the_queued_tickets -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_final_gate_spec_unions_only_the_queued_tickets"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_a_ticket_outside_the_run_cannot_widen_the_final_gate -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_a_ticket_outside_the_run_cannot_widen_the_final_gate"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_the_run_log_names_why_the_queue_stopped -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_the_run_log_names_why_the_queue_stopped"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_a_clean_drain_names_no_stop_reason -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_a_clean_drain_names_no_stop_reason"
+      ]
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
