@@ -1,0 +1,62 @@
+{
+  "ticket": "T010",
+  "started_at": "2026-09-10T19:01:31.896723+00:00",
+  "commit": "b3a3bd12a6035c2debfc0fd3f34ba0141961a154",
+  "base_ref": "68159232ef6f5665d5b5802e33c6a0eda78a30b0",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/gate.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 12.81,
+      "output_tail": "........................................................................ [ 41%]\n........................................................................ [ 82%]\n...............................                                          [100%]\n175 passed in 12.48s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.04,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D22"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_gate_red_proof.py::test_whole_file_pytest_command_refuses"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_gate_red_proof.py::test_node_id_command_is_accepted_and_names_the_offender"
+      ]
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
