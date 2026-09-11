@@ -2,7 +2,7 @@
   "tests/test_session_permissions.py": "50b137c5b3af8b961957c34edf4c15fd72ac1a5616af966a527be16688e1c78b",
   "docker_tests/test_properties.py": "db7d73f61305fff789f99623bca98dd9905087b5f5954ddbd33d876f346001a3",
   "_edad": {
-    "approved_at": "2026-09-11T19:19:06.019547+00:00",
+    "approved_at": "2026-09-11T19:19:46.937893+00:00",
     "ticket_sha256": "b4822447b97498076b8ba0ed2d8906e14d6d7ac5955cb8310e661be7c7f29cad",
     "decisions": [
       "D19"
@@ -60,8 +60,8 @@
     ],
     "mutation_proof": null,
     "full_gate_baseline": {
-      "taken_at": "2026-09-11T19:19:04.634355+00:00",
-      "commit": "34b34d631cd328be2abe0b1ee6b01dc24ec3b958",
+      "taken_at": "2026-09-11T19:19:45.641531+00:00",
+      "commit": "e055f38245b1821d71060d0561c46d542e45b203",
       "commands": {
         "python3 -m pytest -q": {
           "exit_code": 1,
