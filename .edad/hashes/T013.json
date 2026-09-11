@@ -1,0 +1,112 @@
+{
+  "tests/test_session_queue.py": "c70ad297125766d7ca1ba2b19223768366dd0daac70693f1c275e8149273731d",
+  "_edad": {
+    "approved_at": "2026-09-11T15:36:45.177556+00:00",
+    "ticket_sha256": "34491c46c3cd1623d7ac5f8d2d05f7cc922fc02d7336ed76ac642b1b1a26da46",
+    "decisions": [
+      "D1",
+      "D4",
+      "D5",
+      "D6",
+      "D17"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_queue_parser_takes_sandbox_and_network -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_queue_parser_takes_sandbox_and_network"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_session_argv_carries_the_network_to_every_child -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_session_argv_carries_the_network_to_every_child"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_queue_parser_defaults_to_no_sandbox -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_queue_parser_defaults_to_no_sandbox"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_run_log_records_the_tier -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_run_log_records_the_tier"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_session_argv_states_the_tier_even_when_it_is_the_default -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_session_argv_states_the_tier_even_when_it_is_the_default"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_each_ticket_runs_in_its_own_subprocess -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_each_ticket_runs_in_its_own_subprocess"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_docker_night_validates_the_network_before_the_branch_is_cut -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_a_docker_night_validates_the_network_before_the_branch_is_cut"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_refused_network_stops_the_run_at_ticket_zero -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_a_refused_network_stops_the_run_at_ticket_zero"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_queue_ensures_the_proxy_before_the_run_and_removes_it_after -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_queue_ensures_the_proxy_before_the_run_and_removes_it_after"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_queue_leaves_a_proxy_it_did_not_create -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_queue_leaves_a_proxy_it_did_not_create"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-11T15:36:40.147757+00:00",
+      "commit": "2d4eb85f3a5d0f367ffd77f440dc82a0df4b2774",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_session_queue.py::test_each_ticket_runs_in_its_own_subprocess": 1,
+            "pytest:tests/test_session_queue.py::test_the_queue_parser_takes_sandbox_and_network": 1,
+            "pytest:tests/test_session_queue.py::test_session_argv_carries_the_network_to_every_child": 1,
+            "pytest:tests/test_session_queue.py::test_the_queue_parser_defaults_to_no_sandbox": 1,
+            "pytest:tests/test_session_queue.py::test_the_run_log_records_the_tier": 1,
+            "pytest:tests/test_session_queue.py::test_session_argv_states_the_tier_even_when_it_is_the_default": 1,
+            "pytest:tests/test_session_queue.py::test_a_docker_night_validates_the_network_before_the_branch_is_cut": 1,
+            "pytest:tests/test_session_queue.py::test_a_refused_network_stops_the_run_at_ticket_zero": 1,
+            "pytest:tests/test_session_queue.py::test_the_queue_ensures_the_proxy_before_the_run_and_removes_it_after": 1,
+            "pytest:tests/test_session_queue.py::test_the_queue_leaves_a_proxy_it_did_not_create": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
