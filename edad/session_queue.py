@@ -41,6 +41,16 @@ session. D24: D10's gate is the union of the `full_gate` commands of the tickets
 log's `stopped_because` answers "why did this stop" for every stop, not only for
 D8's two - a queue halted by a merge git refused used to say so on stdout alone.
 
+T013 makes the queue carry the sandbox tier. Every child was spawned with no
+`--sandbox` and no `--network`, so the overnight run - the one path where nobody
+is watching the agent - was the one path that never sandboxed. Now one
+`--sandbox`/`--network` per night reaches every child (D1), the default stays
+`none` (D4), `--sandbox` is stated in every child's argv even when it is the
+default (D6), the run log names the tier at the top level (D4), and a docker
+night ensures its proxy and validates its network once - after the plan and
+before the branch is cut (D5), removing on the way out only what it created
+(D17).
+
 D13 is unenforced: v1 is sequential. `plan_run` computes `Plan.independent`
 and nothing acts on it, so a later scheduler is a change rather than a
 redesign - and so the wall-clock parallelism would have saved is measurable
@@ -60,18 +70,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from edad.egress import (  # noqa: F401  # STUB - T013 wires these into run_queue
-    EgressError,
-    ensure_egress_proxy,
-    remove_egress_proxy,
-)
+# Imported by name, not through their modules: the tests replace
+# `ensure_egress_proxy`, `validate_network` and `remove_egress_proxy` *here*
+# to observe the order a docker night reaches them in.
+from edad.egress import EgressError, ensure_egress_proxy, remove_egress_proxy
 from edad.gate import check_freeze, load_ticket, repo_root, run_commands
-from edad.session import (  # noqa: F401  # STUB - T013 wires these into run_queue
-    MAX_NO_PROGRESS,
-    PROMOTED_OUTCOMES,
-    Abort,
-    validate_network,
-)
+from edad.session import MAX_NO_PROGRESS, PROMOTED_OUTCOMES, Abort, validate_network
 
 # D23. How long any one command of the final gate may run.
 #
@@ -120,8 +124,16 @@ def session_argv(
     imported once and looped would freeze that snapshot for the entire run, so
     the final state of the run branch would never have been judged by its own
     gate.
+
+    `--sandbox` is stated in every branch, the default included (D6). Left
+    off when it is `none`, the tier would be asserted by two files' defaults
+    agreeing, and a running night's `ps` output would not say which tier it
+    is. `--network` is appended exactly once, only when a name was given.
     """
-    return [sys.executable, "-m", "edad.session", "run", ticket_id]
+    argv = [sys.executable, "-m", "edad.session", "run", ticket_id, "--sandbox", sandbox]
+    if network is not None:
+        argv += ["--network", network]
+    return argv
 
 
 def outcome_of(exit_code: int) -> str:
@@ -490,7 +502,9 @@ def run_session(
     root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
 ) -> int:
     """Spawn one ticket's session and hand back its exit code."""
-    return subprocess.run(session_argv(ticket_id), cwd=root, check=False).returncode
+    return subprocess.run(
+        session_argv(ticket_id, sandbox=sandbox, network=network), cwd=root, check=False
+    ).returncode
 
 
 # --- D7: a failure is local -------------------------------------------------
@@ -580,9 +594,14 @@ class RunState:
     replacing it, because a reader still needs to tell the two breakers from
     everything else; it is `None` on a clean drain, because a night that drained
     did not stop.
+
+    `sandbox` and `network` are the night's tier (D4): one decision, carried
+    here so `work_one` hands the same flags to every child, and written to the
+    log at the top level so "did this night run sandboxed" is a lookup rather
+    than a reconstruction from N session logs.
     """
 
-    def __init__(  # STUB - T013 threads sandbox/network through to the log
+    def __init__(
         self, plan: Plan, tickets: dict[str, dict], budget_s: float | None = None,
         sandbox: str = "none", network: str | None = None,
     ):
@@ -694,6 +713,8 @@ class RunState:
         return {
             "started_at": self.started_at,
             "elapsed_s": round(self.elapsed_s(), 3),
+            "sandbox": self.sandbox,
+            "network": self.network,
             "tickets": tickets,
             "breaker": self.breaker,
             "stopped_because": self.stopped_because,
@@ -929,7 +950,9 @@ def work_one(root: Path, ticket_id: str, state: RunState, created: Created, run:
     reapprove(root, state.tickets[ticket_id])
     before = session_logs(root, ticket_id)
     started = time.monotonic()
-    outcome = outcome_of(run_session(root, ticket_id))
+    # The tier the state carries, always - default included. Passing it "only
+    # when it is not the default" is the drift D6 exists to close.
+    outcome = outcome_of(run_session(root, ticket_id, state.sandbox, state.network))
     log_path, session_log = read_new_log(before, session_logs(root, ticket_id))
     state.record(
         ticket_id, outcome, session_log=log_path, elapsed_s=round(time.monotonic() - started, 3)
@@ -986,6 +1009,36 @@ def work_queue(root: Path, state: RunState, created: Created, run_branch: str) -
     report_final_gate(state.final_gate)
 
 
+def prepare_tier(sandbox: str, network: str | None) -> bool:
+    """Ensure the proxy and validate the network, once per night. True if this
+    run created the proxy and so must remove it (D17).
+
+    Called between the plan and the branch cut (D5): a misnamed network costs
+    seconds at ticket 0 rather than a night of instant aborts that the run log
+    reports as "ran out of tickets". `ensure` comes first because
+    `validate_network`'s permit probe goes through the proxy; a docker night
+    with no network never reaches `ensure`, and `validate_network` refuses it.
+    A `none` night asks docker nothing.
+
+    `Abort` and `EgressError` become `Refusal`, so `main()` prints and exits 2
+    as for every other refusal. A refused validation is the run's first exit,
+    and the `finally` that tears the proxy down does not exist yet - so what
+    `ensure` just made is removed here, or a refused docker night leaks it.
+    """
+    if sandbox != "docker":
+        return False
+    created = False
+    try:
+        if network is not None:
+            created = ensure_egress_proxy(network)
+        validate_network(sandbox, network)
+    except (Abort, EgressError) as e:
+        if created:
+            remove_egress_proxy(network)
+        raise Refusal(str(e)) from e
+    return created
+
+
 def run_queue(
     root: Path, ticket_ids: list[str], budget_s: float | None = None,
     sandbox: str = "none", network: str | None = None,
@@ -1025,6 +1078,9 @@ def run_queue(
     try:
         tickets = {ticket_id: load_ticket(root, ticket_id) for ticket_id in ticket_ids}
         plan = plan_run(tickets, ticket_ids, done_set(root, ticket_ids, tickets))
+        # After the plan, before the branch: a docker night's proxy and network
+        # are validated once, with root still on `main` and no session spawned.
+        created_proxy = prepare_tier(sandbox, network)
     except BaseException:
         # Refusal, and the bare SystemExit(2) `load_ticket` raises through
         # `gate.die()`. Cut fresh there is no branch yet and nothing to roll
@@ -1039,11 +1095,13 @@ def run_queue(
         try:
             git(root, "checkout", "-q", "-b", run_branch, MAIN_BRANCH)
         except subprocess.CalledProcessError as e:
+            if created_proxy:
+                remove_egress_proxy(network)
             raise Refusal(
                 f"could not cut {run_branch} from {MAIN_BRANCH}: {(e.stderr or e.stdout).strip()}"
             ) from e
 
-    state = RunState(plan, tickets, budget_s=budget_s)
+    state = RunState(plan, tickets, budget_s=budget_s, sandbox=sandbox, network=network)
     created = Created()
 
     try:
@@ -1055,6 +1113,12 @@ def run_queue(
         # remove the hazard. `rollback_branches` adds what earlier invocations
         # left on the same run branch, which is what makes a resumed run's
         # discard cover the whole night rather than this invocation's part.
+        #
+        # The proxy goes on the same path, and only if this run made it (D17):
+        # one already present when the night started - an operator's, or a
+        # concurrent run's - is not this run's to remove.
+        if created_proxy:
+            remove_egress_proxy(network)
         if state.breaker is not None:
             print(f"\nbreaker: {state.breaker}. The queue stopped; the tickets it never")
             print("reached did not fail and are logged as not_run.")
@@ -1074,9 +1138,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a queue of approved tickets on one integration branch")
     r.add_argument("tickets", nargs="+", help="ticket ids, in the order they should run")
-    # STUB - T013 gives these the session's choices and defaults.
-    r.add_argument("--sandbox", default="docker")
-    r.add_argument("--network", default="")
+    # The session's own flags, choices and defaults included (D1, D4): one
+    # decision per night, uniform across the queue, and a night nobody thought
+    # about changes nothing. `--image` and `--yolo` are deferred.
+    r.add_argument(
+        "--sandbox",
+        choices=["none", "docker"],
+        default="none",
+        help="run every child's agent under this tier; validated once, at plan time",
+    )
+    r.add_argument(
+        "--network",
+        metavar="NAME",
+        default=None,
+        help="attach every agent container to this docker network instead of "
+        "--network none; refused unless docker reports it internal. The egress "
+        "proxy is ensured once for the night.",
+    )
     r.add_argument(
         "--budget-hours",
         type=float,
@@ -1092,7 +1170,10 @@ def main() -> int:
     args = build_parser().parse_args()
     budget_s = None if args.budget_hours is None else args.budget_hours * 3600
     try:
-        return run_queue(repo_root(), args.tickets, budget_s=budget_s)
+        return run_queue(
+            repo_root(), args.tickets, budget_s=budget_s,
+            sandbox=args.sandbox, network=args.network,
+        )
     except Refusal as e:
         print(f"edad: {e}", file=sys.stderr)
         return 2
