@@ -131,9 +131,14 @@ class FakeSession:
         self.fails = set(fails)
         self.ran: list[str] = []
         self.branches: dict[str, str] = {}
+        # (sandbox, network) each child was handed, in the order they ran.
+        self.tiers: list[tuple[str, str | None]] = []
 
-    def __call__(self, root: Path, ticket_id: str) -> int:
+    def __call__(
+        self, root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
+    ) -> int:
         self.ran.append(ticket_id)
+        self.tiers.append((sandbox, network))
         if ticket_id in self.fails:
             return 1
         branch = f"edad/{ticket_id.lower()}"
@@ -235,8 +240,10 @@ def test_non_fast_forward_stops_the_run(monkeypatch, repo):
     `full_gate` ever judged, so the run stops and says so instead."""
 
     class DivergingSession(FakeSession):
-        def __call__(self, root: Path, ticket_id: str) -> int:
-            code = super().__call__(root, ticket_id)
+        def __call__(
+            self, root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
+        ) -> int:
+            code = super().__call__(root, ticket_id, sandbox, network)
             # Move the run branch on after the ticket branched, so the merge
             # can no longer fast-forward.
             (root / "src" / "drift.py").write_text(f"# drifted before {ticket_id}\n")
@@ -261,8 +268,11 @@ def test_merge_failure_reports_gits_own_reason(monkeypatch, repo, capsys):
     edit - is the one thing not on screen."""
 
     class TouchesATrackedFile(FakeSession):
-        def __call__(self, root: Path, ticket_id: str) -> int:
+        def __call__(
+            self, root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
+        ) -> int:
             self.ran.append(ticket_id)
+            self.tiers.append((sandbox, network))
             branch = f"edad/{ticket_id.lower()}"
             self.branches[ticket_id] = branch
             _git(root, "branch", branch, "HEAD")
@@ -293,7 +303,9 @@ def test_each_ticket_runs_in_its_own_subprocess():
     takes the night down; and a session holds the `edad.gate` it imported at
     start, which is what makes the verifier the pre-session code. A controller
     that imported once and looped would freeze that snapshot for the whole run."""
-    assert session_argv("T004") == [sys.executable, "-m", "edad.session", "run", "T004"]
+    assert session_argv("T004") == [
+        sys.executable, "-m", "edad.session", "run", "T004", "--sandbox", "none",
+    ]
 
 
 def test_session_exit_code_is_the_outcome_signal():
@@ -443,7 +455,9 @@ def test_discard_command_names_only_what_the_run_created(monkeypatch, repo, caps
     while the command does nothing.
     """
 
-    def refuses_before_creating_anything(root: Path, ticket_id: str) -> int:
+    def refuses_before_creating_anything(
+        root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
+    ) -> int:
         return 2
 
     drive(monkeypatch, repo, ["T1"], session=refuses_before_creating_anything)
@@ -1006,8 +1020,10 @@ def test_the_run_log_names_why_the_queue_stopped(monkeypatch, repo):
     exists because correlating a night by hand at 8am is what one file is for."""
 
     class DivergingSession(FakeSession):
-        def __call__(self, root: Path, ticket_id: str) -> int:
-            code = super().__call__(root, ticket_id)
+        def __call__(
+            self, root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
+        ) -> int:
+            code = super().__call__(root, ticket_id, sandbox, network)
             # Move the run branch on after the ticket branched, so the merge
             # back can no longer fast-forward.
             (root / "src" / "drift.py").write_text(f"# drifted before {ticket_id}\n")
@@ -1052,3 +1068,265 @@ def test_a_clean_drain_names_no_stop_reason(monkeypatch, repo):
     assert log["stopped_because"] is None, (
         f"the queue drained; {log['stopped_because']!r} is not a stop"
     )
+
+
+# --- the sandbox tier: D1, D4, D5 (plan-time), D6, D17 (queue) --------------
+#
+# T013. The controller spawned every child with no --sandbox and no --network,
+# so the overnight run - the one path where nobody is watching - was the one
+# path that never sandboxed. These tests are about the queue carrying the tier,
+# and about what a docker night does before it cuts its branch.
+
+
+class Docker:
+    """The three names a docker night reaches through `edad.session` and
+    `edad.egress`, replaced at this module so the test observes the order.
+
+    `calls` records (name, branch root was on) as each is reached, because the
+    contract is positional: the proxy is ensured, then the network validated,
+    and both happen while root is still on `main` - before the run branch is
+    cut and before any session is spawned. `created` is what `ensure` reports,
+    and `refuse` is what `validate` raises, if anything.
+    """
+
+    def __init__(self, created: bool = True, refuse: Exception | None = None):
+        self.created = created
+        self.refuse = refuse
+        self.calls: list[tuple[str, str]] = []
+        self.networks: list[str | None] = []
+
+    def _on(self, root: Path) -> str:
+        return _git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    def install(self, monkeypatch, root: Path) -> Docker:
+        def ensure(network: str) -> bool:
+            self.calls.append(("ensure", self._on(root)))
+            self.networks.append(network)
+            return self.created
+
+        def validate(sandbox: str, network: str | None, *args, **kwargs) -> list[str]:
+            self.calls.append(("validate", self._on(root)))
+            self.networks.append(network)
+            if self.refuse is not None:
+                raise self.refuse
+            return []
+
+        def remove(network: str) -> None:
+            self.calls.append(("remove", self._on(root)))
+            self.networks.append(network)
+
+        monkeypatch.setattr(sq, "ensure_egress_proxy", ensure)
+        monkeypatch.setattr(sq, "validate_network", validate)
+        monkeypatch.setattr(sq, "remove_egress_proxy", remove)
+        return self
+
+    def names(self) -> list[str]:
+        return [name for name, _ in self.calls]
+
+
+def run_branches(root: Path) -> list[str]:
+    out = _git(root, "branch", "--list", "edad/run-*")
+    return [b.strip("* ").strip() for b in out.splitlines() if b.strip()]
+
+
+def back_to_main(root: Path) -> None:
+    """Between two nights in one test. The run branch is named by the second,
+    so the one just finished is deleted rather than left to collide."""
+    _git(root, "checkout", "-q", "main")
+    for branch in run_branches(root):
+        _git(root, "branch", "-q", "-D", branch)
+
+
+def test_the_queue_parser_takes_sandbox_and_network():
+    """D1. One decision per night, uniform across the queue: the flags are the
+    session's own, choices included, so an operator who knows one entry point
+    knows the other."""
+    args = sq.build_parser().parse_args(
+        ["run", "T1", "T2", "--sandbox", "docker", "--network", "edad-fixtures"]
+    )
+    assert args.sandbox == "docker"
+    assert args.network == "edad-fixtures"
+    assert args.tickets == ["T1", "T2"]
+
+    # The session's choices, not a free string: a typo must be refused by the
+    # parser rather than reach a child that refuses it N times.
+    with pytest.raises(SystemExit):
+        sq.build_parser().parse_args(["run", "T1", "--sandbox", "podman"])
+
+
+def test_session_argv_carries_the_network_to_every_child(monkeypatch, repo):
+    """D1. The builder emits `--network <name>` exactly once when a name is
+    given, and the queue hands the tier to every child - the third as much as
+    the first, and never "only when it is not the default"."""
+    argv = session_argv("T1", sandbox="docker", network="edad-fixtures")
+    assert argv[:5] == [sys.executable, "-m", "edad.session", "run", "T1"]
+    assert argv.count("--network") == 1
+    assert argv[argv.index("--network") + 1] == "edad-fixtures"
+    assert argv[argv.index("--sandbox") + 1] == "docker"
+    assert "--network" not in session_argv("T1", sandbox="none")
+
+    Docker().install(monkeypatch, repo)
+    _, session, _, _ = drive(
+        monkeypatch, repo, ["T1", "T2", "T3"], sandbox="docker", network="edad-fixtures"
+    )
+
+    assert session.ran == ["T1", "T2", "T3"]
+    assert session.tiers == [("docker", "edad-fixtures")] * 3
+
+
+def test_the_queue_parser_defaults_to_no_sandbox():
+    """D4. Parity with `session.py`: a night nobody thought about changes
+    nothing. Defaulting to docker would promote a default onto a code path that
+    has never executed overnight."""
+    args = sq.build_parser().parse_args(["run", "T1"])
+    assert args.sandbox == "none"
+    assert args.network is None
+
+
+def test_the_run_log_records_the_tier(monkeypatch, repo):
+    """D4. "Did this night run sandboxed" is a lookup, not a reconstruction
+    from N session logs. Top-level, beside `run_branch`, on every night - the
+    default one says `none` rather than saying nothing."""
+    drive(monkeypatch, repo, ["T1"])
+    log = latest_run_log(repo)
+    assert log.get("sandbox") == "none", f"the log does not name the tier: {sorted(log)}"
+    assert "network" in log and log["network"] is None
+    assert "run_branch" in log
+
+    state = RunState(
+        plan_run(FOUR_INDEPENDENT, ["T1"], set()), FOUR_INDEPENDENT,
+        sandbox="docker", network="edad-fixtures",
+    )
+    payload = state.as_log()
+    assert payload["sandbox"] == "docker"
+    assert payload["network"] == "edad-fixtures"
+
+
+def test_session_argv_states_the_tier_even_when_it_is_the_default(monkeypatch, repo):
+    """D6. `--sandbox none` is in the child's argv when nothing asked for it.
+    Otherwise the tier is asserted by two files' defaults agreeing, and a
+    running night's `ps` output would not say which tier it is."""
+    default = session_argv("T1")
+    assert default.count("--sandbox") == 1
+    assert default[default.index("--sandbox") + 1] == "none"
+    assert session_argv("T1", sandbox="none", network=None) == default
+    assert "--network" not in default
+
+    # And the queue passes what it carries, default included - `work_one`
+    # never decides that the default is not worth mentioning.
+    _, session, _, _ = drive(monkeypatch, repo, ["T1", "T2"])
+    assert session.tiers == [("none", None), ("none", None)]
+
+
+def test_a_docker_night_validates_the_network_before_the_branch_is_cut(monkeypatch, repo):
+    """D5, the plan-time half. A misnamed network costs seconds at ticket 0
+    rather than a night of instant aborts that the run log reports as "ran out
+    of tickets". So: proxy ensured, then network validated, both with root on
+    `main` and no `edad/run-*` in existence, and only then a branch and a
+    session. A `none` night asks docker nothing at all."""
+    docker = Docker().install(monkeypatch, repo)
+
+    _, session, _, _ = drive(monkeypatch, repo, ["T1"], sandbox="docker", network="edad-fixtures")
+
+    assert docker.names()[:2] == ["ensure", "validate"]
+    assert docker.calls[0] == ("ensure", "main")
+    assert docker.calls[1] == ("validate", "main")
+    assert docker.networks[:2] == ["edad-fixtures", "edad-fixtures"]
+    assert session.ran == ["T1"]
+
+    # The contrast: the default tier reaches none of the three.
+    quiet = Docker().install(monkeypatch, repo)
+    back_to_main(repo)
+    drive(monkeypatch, repo, ["T2"])
+    assert quiet.calls == []
+
+
+def test_a_refused_network_stops_the_run_at_ticket_zero(monkeypatch, repo):
+    """D5. `validate_network`'s `Abort` and the lifecycle's `EgressError` are
+    the queue's own `Refusal`, so `main()` prints and exits 2 as for every
+    other refusal - and the refusal happens before anything exists: no branch
+    cut, no session spawned, HEAD still on `main`."""
+    before = _git(repo, "rev-parse", "HEAD").strip()
+    docker = Docker(refuse=sq.Abort("network edad-fixtures is not internal")).install(
+        monkeypatch, repo
+    )
+
+    spawned = FakeSession()
+    with pytest.raises(Refusal, match="not internal"):
+        drive(
+            monkeypatch, repo, ["T1", "T2"], session=spawned,
+            sandbox="docker", network="edad-fixtures",
+        )
+
+    assert spawned.ran == []
+    assert docker.names() == ["ensure", "validate", "remove"], (
+        "ensure, refuse, and tear down what this run created"
+    )
+    assert run_branches(repo) == []
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert _git(repo, "rev-parse", "HEAD").strip() == before
+
+    # A proxy that could not be ensured is the same refusal, and validation is
+    # never reached without it.
+    failed = Docker().install(monkeypatch, repo)
+
+    def cannot_ensure(network: str) -> bool:
+        failed.calls.append(("ensure", "main"))
+        raise sq.EgressError("edad-egress image is not built")
+
+    monkeypatch.setattr(sq, "ensure_egress_proxy", cannot_ensure)
+    with pytest.raises(Refusal, match="not built"):
+        drive(
+            monkeypatch, repo, ["T1"], session=spawned,
+            sandbox="docker", network="edad-fixtures",
+        )
+    assert failed.names() == ["ensure"]
+    assert spawned.ran == []
+    assert run_branches(repo) == []
+
+
+def test_the_queue_ensures_the_proxy_before_the_run_and_removes_it_after(monkeypatch, repo):
+    """D17, the queue half. One proxy per night: ensured once before the first
+    session, removed once after the last - in the same `finally` that writes
+    the run log, so a refusal mid-queue tears it down too."""
+    docker = Docker(created=True).install(monkeypatch, repo)
+
+    _, session, _, _ = drive(
+        monkeypatch, repo, ["T1", "T2"], sandbox="docker", network="edad-fixtures"
+    )
+
+    assert session.ran == ["T1", "T2"]
+    assert docker.names() == ["ensure", "validate", "remove"]
+    assert docker.networks == ["edad-fixtures"] * 3
+    assert (repo / ".edad" / "runs").exists(), "the run log was written on the same exit path"
+
+    # Mid-queue refusal: the run log is written and the proxy is removed anyway.
+    torn = Docker(created=True).install(monkeypatch, repo)
+    back_to_main(repo)
+
+    def refuse_on_the_second(root: Path, tkt: dict) -> None:
+        if tkt["id"] == "T4":
+            raise Refusal("T4 cannot be re-approved")
+
+    monkeypatch.setattr(sq, "run_session", FakeSession())
+    monkeypatch.setattr(sq, "reapprove", refuse_on_the_second)
+    monkeypatch.setattr(sq, "load_ticket", lambda root, tid: ticket(tid))
+    monkeypatch.setattr(sq, "final_gate", lambda root, *_: {"passed": True, "commands": []})
+    with pytest.raises(Refusal):
+        sq.run_queue(repo, ["T3", "T4"], sandbox="docker", network="edad-fixtures")
+    assert torn.names() == ["ensure", "validate", "remove"]
+
+
+def test_the_queue_leaves_a_proxy_it_did_not_create(monkeypatch, repo):
+    """D17. Whoever created the proxy destroys it. A proxy already present
+    when the night started - an operator's, or a concurrent run's - is not this
+    run's to remove."""
+    docker = Docker(created=False).install(monkeypatch, repo)
+
+    _, session, _, _ = drive(
+        monkeypatch, repo, ["T1", "T2"], sandbox="docker", network="edad-fixtures"
+    )
+
+    assert session.ran == ["T1", "T2"]
+    assert docker.names() == ["ensure", "validate"]
+    assert "remove" not in docker.names()

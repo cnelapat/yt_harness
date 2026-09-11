@@ -60,8 +60,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from edad.egress import (  # noqa: F401  # STUB - T013 wires these into run_queue
+    EgressError,
+    ensure_egress_proxy,
+    remove_egress_proxy,
+)
 from edad.gate import check_freeze, load_ticket, repo_root, run_commands
-from edad.session import MAX_NO_PROGRESS, PROMOTED_OUTCOMES
+from edad.session import (  # noqa: F401  # STUB - T013 wires these into run_queue
+    MAX_NO_PROGRESS,
+    PROMOTED_OUTCOMES,
+    Abort,
+    validate_network,
+)
 
 # D23. How long any one command of the final gate may run.
 #
@@ -98,7 +108,9 @@ class Refusal(Exception):
 # --- pure builders ----------------------------------------------------------
 
 
-def session_argv(ticket_id: str) -> list[str]:
+def session_argv(
+    ticket_id: str, sandbox: str = "none", network: str | None = None
+) -> list[str]:
     """The command that runs one ticket. A subprocess, not an import.
 
     `gate.die()` raises a bare `SystemExit(2)` from twenty-five sites that
@@ -474,7 +486,9 @@ def reapprove(root: Path, ticket: dict) -> None:
         )
 
 
-def run_session(root: Path, ticket_id: str) -> int:
+def run_session(
+    root: Path, ticket_id: str, sandbox: str = "none", network: str | None = None
+) -> int:
     """Spawn one ticket's session and hand back its exit code."""
     return subprocess.run(session_argv(ticket_id), cwd=root, check=False).returncode
 
@@ -568,10 +582,15 @@ class RunState:
     did not stop.
     """
 
-    def __init__(self, plan: Plan, tickets: dict[str, dict], budget_s: float | None = None):
+    def __init__(  # STUB - T013 threads sandbox/network through to the log
+        self, plan: Plan, tickets: dict[str, dict], budget_s: float | None = None,
+        sandbox: str = "none", network: str | None = None,
+    ):
         self.plan = plan
         self.tickets = tickets
         self.budget_s = budget_s
+        self.sandbox = sandbox
+        self.network = network
         self.started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         # monotonic, because the budget is a duration: a clock stepped by NTP
         # or by a DST change mid-night would otherwise fire the breaker, or
@@ -967,7 +986,10 @@ def work_queue(root: Path, state: RunState, created: Created, run_branch: str) -
     report_final_gate(state.final_gate)
 
 
-def run_queue(root: Path, ticket_ids: list[str], budget_s: float | None = None) -> int:
+def run_queue(
+    root: Path, ticket_ids: list[str], budget_s: float | None = None,
+    sandbox: str = "none", network: str | None = None,
+) -> int:
     """Plan the queue, then work it on an integration branch.
 
     The plan comes first and is made from the tickets' own `blocked_by` (D1),
@@ -1052,6 +1074,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a queue of approved tickets on one integration branch")
     r.add_argument("tickets", nargs="+", help="ticket ids, in the order they should run")
+    # STUB - T013 gives these the session's choices and defaults.
+    r.add_argument("--sandbox", default="docker")
+    r.add_argument("--network", default="")
     r.add_argument(
         "--budget-hours",
         type=float,
