@@ -1,0 +1,119 @@
+{
+  "tests/test_egress_proxy.py": "b5331bde6f4e2b51af4676be62261291130e2491ab9f09c99109e95435ae56bb",
+  "_edad": {
+    "approved_at": "2026-09-11T14:34:10.287830+00:00",
+    "ticket_sha256": "1d0a93bef5e188ab8bef7763205190b0510c47373a69733153ecbce74f270a5f",
+    "decisions": [
+      "D13",
+      "D14",
+      "D15",
+      "D17"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_connect_to_the_allowlisted_host_is_spliced_to_the_upstream -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_connect_to_the_allowlisted_host_is_spliced_to_the_upstream"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_connect_to_any_other_host_is_refused_before_any_upstream_connection -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_connect_to_any_other_host_is_refused_before_any_upstream_connection"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_a_raw_ip_target_is_refused -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_a_raw_ip_target_is_refused"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_a_non_connect_request_is_refused -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_a_non_connect_request_is_refused"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_the_allowlist_is_exactly_the_model_api -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_the_allowlist_is_exactly_the_model_api"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_the_proxy_image_is_built_from_the_checked_in_daemon -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_the_proxy_image_is_built_from_the_checked_in_daemon"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_ensure_starts_the_proxy_on_bridge_first_then_attaches_the_internal_net -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_ensure_starts_the_proxy_on_bridge_first_then_attaches_the_internal_net"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_the_proxy_name_is_deterministic_per_network -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_the_proxy_name_is_deterministic_per_network"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_ensure_creates_only_when_absent_and_reports_whether_it_did -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_ensure_creates_only_when_absent_and_reports_whether_it_did"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_remove_tears_down_by_name -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_remove_tears_down_by_name"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_egress_proxy.py::test_ensure_refuses_when_the_image_is_absent_naming_the_build_command -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_egress_proxy.py::test_ensure_refuses_when_the_image_is_absent_naming_the_build_command"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-11T14:34:08.276023+00:00",
+      "commit": "634ee860375730aff57e4feeed8123863dc87c01",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_egress_proxy.py::test_connect_to_the_allowlisted_host_is_spliced_to_the_upstream": 1,
+            "pytest:tests/test_egress_proxy.py::test_connect_to_any_other_host_is_refused_before_any_upstream_connection": 1,
+            "pytest:tests/test_egress_proxy.py::test_a_raw_ip_target_is_refused": 1,
+            "pytest:tests/test_egress_proxy.py::test_a_non_connect_request_is_refused": 1,
+            "pytest:tests/test_egress_proxy.py::test_the_allowlist_is_exactly_the_model_api": 1,
+            "pytest:tests/test_egress_proxy.py::test_the_proxy_image_is_built_from_the_checked_in_daemon": 1,
+            "pytest:tests/test_egress_proxy.py::test_the_proxy_name_is_deterministic_per_network": 1,
+            "pytest:tests/test_egress_proxy.py::test_ensure_starts_the_proxy_on_bridge_first_then_attaches_the_internal_net": 1,
+            "pytest:tests/test_egress_proxy.py::test_ensure_creates_only_when_absent_and_reports_whether_it_did": 1,
+            "pytest:tests/test_egress_proxy.py::test_ensure_refuses_when_the_image_is_absent_naming_the_build_command": 1,
+            "pytest:tests/test_egress_proxy.py::test_remove_tears_down_by_name": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
