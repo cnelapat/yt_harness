@@ -1,0 +1,85 @@
+{
+  "tests/test_session_permissions.py": "50b137c5b3af8b961957c34edf4c15fd72ac1a5616af966a527be16688e1c78b",
+  "docker_tests/test_properties.py": "db7d73f61305fff789f99623bca98dd9905087b5f5954ddbd33d876f346001a3",
+  "_edad": {
+    "approved_at": "2026-09-11T19:19:06.019547+00:00",
+    "ticket_sha256": "b4822447b97498076b8ba0ed2d8906e14d6d7ac5955cb8310e661be7c7f29cad",
+    "decisions": [
+      "D19"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_docker_bypasses_permissions_whatever_yolo_says -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_docker_bypasses_permissions_whatever_yolo_says"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_the_host_tier_accepts_edits_and_allows_the_gate_commands_with_the_prompt_first -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_the_host_tier_accepts_edits_and_allows_the_gate_commands_with_the_prompt_first"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_yolo_on_the_host_bypasses -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_yolo_on_the_host_bypasses"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_allowed_tools_names_each_gate_command_once_and_a_pytest_prefix -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_allowed_tools_names_each_gate_command_once_and_a_pytest_prefix"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_permissions_says_what_the_agent_could_do_per_tier -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_permissions_says_what_the_agent_could_do_per_tier"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_the_session_log_records_permissions_beside_network_access -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_the_session_log_records_permissions_beside_network_access"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_permissions.py::test_the_agent_image_does_not_run_as_root -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_permissions.py::test_the_agent_image_does_not_run_as_root"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-11T19:19:04.634355+00:00",
+      "commit": "34b34d631cd328be2abe0b1ee6b01dc24ec3b958",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_session_permissions.py::test_docker_bypasses_permissions_whatever_yolo_says": 1,
+            "pytest:tests/test_session_permissions.py::test_the_host_tier_accepts_edits_and_allows_the_gate_commands_with_the_prompt_first": 1,
+            "pytest:tests/test_session_permissions.py::test_yolo_on_the_host_bypasses": 1,
+            "pytest:tests/test_session_permissions.py::test_allowed_tools_names_each_gate_command_once_and_a_pytest_prefix": 1,
+            "pytest:tests/test_session_permissions.py::test_permissions_says_what_the_agent_could_do_per_tier": 1,
+            "pytest:tests/test_session_permissions.py::test_the_session_log_records_permissions_beside_network_access": 1,
+            "pytest:tests/test_session_permissions.py::test_the_agent_image_does_not_run_as_root": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
