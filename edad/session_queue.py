@@ -534,27 +534,36 @@ def no_commit_abort(session_log: dict) -> bool:
     return not any(step.get("made_commit") for step in session_log.get("iterations") or [])
 
 
-# STUB - T014 gives this its meaning: the logless breaker's threshold.
+# Aliased rather than copied, so raising one threshold and not the other stays
+# a one-line edit and keeping them together costs nothing. Same reasoning as
+# `no_progress`: one logless session absorbs a transient - a docker daemon
+# hiccup, a lock refused because a human was mid-merge - two in a row is
+# systematic.
 MAX_LOGLESS = MAX_NO_PROGRESS
 
 
-def breaker_fired(  # STUB - T014 makes `logless` fire "no_log"
+def breaker_fired(
     *, no_commit_aborts: int, elapsed_s: float, budget_s: float | None = None,
     logless: int = 0,
 ) -> str | None:
-    """`"no_progress"`, `"wall_clock"`, or `None`. Pure, keyword-only.
+    """`"no_progress"`, `"wall_clock"`, `"no_log"`, or `None`. Pure, keyword-only.
 
     `MAX_NO_PROGRESS` is the session's own threshold read one level up: inside a
     session it counts iterations that changed nothing, here it counts whole
     sessions that did. `budget_s=None` means no wall-clock bound. Wall-clock is
     the bound the operator agreed to when they went to bed; it does not bound
-    the bill, and nothing here does. Keyword-only because all three arguments
+    the bill, and nothing here does. Keyword-only because all four arguments
     are numbers, and a positional call that transposed two would still run.
+
+    Precedence among the three is not pinned when more than one would fire;
+    `no_progress` stays first as the older and better-understood signal.
     """
     if no_commit_aborts >= MAX_NO_PROGRESS:
         return "no_progress"
     if budget_s is not None and elapsed_s > budget_s:
         return "wall_clock"
+    if logless >= MAX_LOGLESS:
+        return "no_log"
     return None
 
 
@@ -625,7 +634,7 @@ class RunState:
         self.stopped_because: str | None = None
         self.outcomes: dict[str, dict] = {}
         self.no_commit_aborts = 0
-        self.logless = 0  # STUB - T014 counts and resets it in `fail` and `promote`
+        self.logless = 0
         self.final_gate: dict | None = None
 
     def elapsed_s(self) -> float:
@@ -674,6 +683,7 @@ class RunState:
                 no_commit_aborts=self.no_commit_aborts,
                 elapsed_s=self.elapsed_s(),
                 budget_s=self.budget_s,
+                logless=self.logless,
             )
             if self.breaker is not None:
                 self.stop(f"breaker {self.breaker} fired; the queue stopped")
@@ -681,22 +691,32 @@ class RunState:
 
     def promote(self, ticket_id: str, merge_sha: str) -> None:
         self.no_commit_aborts = 0
+        self.logless = 0
         self.record(ticket_id, "promoted", merge_sha=merge_sha)
         self.check_breaker()
 
     def fail(self, ticket_id: str, session_log: dict | None = None) -> None:
-        """Mark it failed, skip what it blocks, and count it toward the breaker.
+        """Mark it failed, skip what it blocks, and count it toward the breakers.
 
-        `session_log=None` means the log could not be read, and it resets the
-        count rather than raising it. The breaker exists to stop a night that is
-        not running; firing it on the absence of evidence would stop a night on
-        a guess.
+        `session_log=None` means the log could not be read - no file appeared,
+        or one appeared and could not be parsed - and it resets
+        `no_commit_aborts` rather than raising it: that counter asks whether
+        sessions that ran are committing, and the absence of evidence answers
+        nothing about that. It is distinguishable evidence for `logless`
+        instead: a session that does not even write the log it always writes
+        did not run, and enough of those in a row is an environment failure,
+        not a run of unlucky tickets. A session that did write a log resets
+        `logless` the same way.
         """
         self.record(ticket_id, "failed")
         if session_log is not None and no_commit_abort(session_log):
             self.no_commit_aborts += 1
         else:
             self.no_commit_aborts = 0
+        if session_log is None:
+            self.logless += 1
+        else:
+            self.logless = 0
         for dependent in self.dependents(ticket_id):
             # First cause wins: a ticket already skipped keeps the failure that
             # actually stopped it, not whichever later one also reaches it.
