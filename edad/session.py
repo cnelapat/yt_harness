@@ -12,10 +12,11 @@ a signed-off record; the merge decision stays with a human.
 
 Usage
     python3 -m edad.session run T001                    # local worktree
-    python3 -m edad.session run T001 --sandbox docker   # network-isolated
     python3 -m edad.session run T001 --sandbox docker --network edad-fixtures
-                                                       # ... plus that network,
-                                                       # if docker calls it internal
+                                                       # container on that network,
+                                                       # reaching the model only via
+                                                       # the egress proxy; refused
+                                                       # unless preflight measured it
     python3 -m edad.session run T001 --dry-run          # prompt only, no agent
 """
 
@@ -35,7 +36,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from edad.egress import (  # noqa: F401  # STUB - T016 wires these into cmd_run
+# By name into this module: cmd_run's lifecycle is tested with the ensure and
+# remove replaced at `session.`, not at `egress.`.
+from edad.egress import (
     EgressError,
     ensure_egress_proxy,
     proxy_url,
@@ -57,6 +60,14 @@ from edad.gate import (
 DEFAULT_IMAGE = "edad-agent:latest"
 AGENT_TIMEOUT_S = 900
 AGENT_TAIL = 2000
+TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
+# The permit probe is one trivial model turn (measured 4s) and, through a dead
+# proxy, 20s of the CLI's own retries. Well past both: a probe that is still
+# running at this point is a configuration nobody measured, and is refused.
+PERMIT_PROBE_TIMEOUT_S = 180
+PERMIT_PROBE_PROMPT = "Reply with the single word: ok"
+# The checks a --dry-run skips, by name, so cmd_run can print them.
+DRY_RUN_SKIPS = ["oauth token", "proxy refuses", "proxy permits"]
 # An agent that exits non-zero and commits nothing is not failing the ticket,
 # it is not running. One retry absorbs a transient; two in a row is systematic.
 MAX_NO_PROGRESS = 2
@@ -82,9 +93,15 @@ class Unwinnable(Abort):
     """
 
 
-def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool,
-              network: str | None = None) -> None:
-    """Refuse to start rather than fail expensively halfway through."""
+def preflight(  # noqa: PLR0913  # the run's five knobs, passed through; not five jobs
+    root: Path, ticket: dict, sandbox: str, dry_run: bool,
+    network: str | None = None, image: str = DEFAULT_IMAGE,
+) -> list[str]:
+    """Refuse to start rather than fail expensively halfway through.
+
+    Returns the names of the network checks that were skipped (see
+    validate_network): cmd_run prints them, and has no other way to learn them.
+    """
     if os.environ.get("ANTHROPIC_API_KEY"):
         raise Abort(
             "ANTHROPIC_API_KEY is set. An unattended loop with a key present bills "
@@ -152,7 +169,7 @@ def preflight(root: Path, ticket: dict, sandbox: str, dry_run: bool,
     # Last, so the plainer refusals above (no docker at all) speak first: this
     # one's message is about a network, and "cannot report on it" is a poor way
     # to say docker is not installed.
-    validate_network(sandbox, network)
+    return validate_network(sandbox, network, image, dry_run)
 
 
 def docker_network_internal(name: str) -> str | None:
@@ -164,8 +181,8 @@ def docker_network_internal(name: str) -> str | None:
     distinction: what it needs to know is whether the isolation was measured,
     and an unmeasured network is refused whatever the reason.
 
-    The only thing in this tier that shells out, and a module-level name so the
-    refusal logic can be tested against each answer without a daemon.
+    A module-level name so the refusal logic can be tested against each answer
+    without a daemon; every other shell-out in this tier follows the same shape.
     """
     try:
         proc = subprocess.run(
@@ -179,44 +196,172 @@ def docker_network_internal(name: str) -> str | None:
     return proc.stdout.strip()
 
 
+def probe_container(network: str, image: str, script: str,
+                    timeout: int = 60) -> tuple[int, str] | None:
+    """`(returncode, stdout)` of `python3 -c script` in a throwaway container
+    on `network`, or None when the container could not be run at all."""
+    try:
+        proc = subprocess.run(
+            ["docker", "run", "--rm", "--network", network, image, "python3", "-c", script],
+            capture_output=True, text=True, check=False, timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.returncode, proc.stdout.strip()
+
+
+# Exit codes the probe scripts use to answer, distinct from anything docker or a
+# missing python3 would produce (125-127), so those collapse to "not measured".
+PROBE_YES = 0
+PROBE_NO = 3
+
+EGRESS_PROBE = """\
+import socket, sys
+s = socket.socket()
+s.settimeout(5)
+try:
+    s.connect(("1.1.1.1", 443))
+except OSError:
+    sys.exit(3)
+sys.exit(0)
+"""
+
+# Prints the status line of the proxy's reply and exits 0; exits 3 when the
+# proxy could not be reached or did not answer.
+REFUSE_PROBE = """\
+import socket, sys
+from urllib.parse import urlsplit
+u = urlsplit(%r)
+try:
+    s = socket.create_connection((u.hostname, u.port), timeout=5)
+    s.sendall(b"CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n")
+    reply = s.recv(1024)
+except OSError:
+    sys.exit(3)
+if not reply:
+    sys.exit(3)
+print(reply.split(b"\\r\\n", 1)[0].decode(errors="replace"))
+"""
+
+
 def docker_network_egress(network: str, image: str) -> bool | None:
-    """STUB - T016 fills it in. D11's probe: whether an unconfigured container
-    on `network` reaches the internet. True reached, False did not, None the
-    probe could not be run."""
-    return False
+    """D11's probe: whether an unconfigured container on `network` reaches
+    the internet. True reached, False did not, None the probe could not be run.
+
+    `Internal: true` no longer backs the claim on its own - a forwarding
+    process on the network is egress whatever docker calls the network - so a
+    throwaway container tries to reach out. A raw-IP TCP connect, no DNS
+    anywhere: an internal net has no resolver, and the probe must be instant
+    in both directions (measured: `Network is unreachable` in 0.00s).
+    """
+    answer = probe_container(network, image, EGRESS_PROBE)
+    if answer is None:
+        return None
+    code, _ = answer
+    if code == PROBE_YES:
+        return True
+    if code == PROBE_NO:
+        return False
+    return None
 
 
 def proxy_refuses(network: str, image: str) -> bool | None:
-    """STUB - T016 fills it in. D16's refusal half: whether the proxy on
-    `network` answers a CONNECT to a non-allowlisted host with anything but
-    200. None when it could not be probed."""
-    return None
+    """D16's refusal half: whether the proxy on `network` answers a CONNECT to
+    a non-allowlisted host with anything but 200. None when it could not be
+    probed - no proxy to connect to, or no container to connect from.
+
+    Asked from a container on the network, because that is where the proxy's
+    name resolves and where the agent will be asking from.
+    """
+    answer = probe_container(network, image, REFUSE_PROBE % proxy_url(network))
+    if answer is None:
+        return None
+    code, status_line = answer
+    if code != PROBE_YES:
+        return None
+    parts = status_line.split()
+    if len(parts) < 2 or not parts[0].startswith("HTTP/") or not parts[1].isdigit():
+        return None
+    return parts[1] != "200"
 
 
 def permit_probe_argv(network: str, image: str) -> list[str]:
-    """STUB - T016 fills it in. The `claude -p --max-turns 1` run that proves
-    the proxy permits the model API with the token the agent will hold."""
-    return []
+    """The `claude -p --max-turns 1` run that proves the proxy permits the
+    model API with the token the agent will hold. Pure.
+
+    One call proves three things - the proxy permits the API, the token is
+    valid, and it is the token the agent will hold - only because the probe is
+    the agent's own client, in the agent's own image, on the named network,
+    with the token crossing the way it will cross for the agent: the bare
+    `-e NAME` form, so its value is never an element of this list.
+    """
+    url = proxy_url(network)
+    return [
+        "docker", "run", "--rm",
+        "--network", network,
+        "-e", TOKEN_VAR,
+        "-e", f"HTTPS_PROXY={url}",
+        "-e", f"HTTP_PROXY={url}",
+        "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        image,
+        "claude", "-p", "--max-turns", "1", PERMIT_PROBE_PROMPT,
+    ]
 
 
 def proxy_permits(network: str, image: str) -> tuple[int, str] | None:
-    """STUB - T016 fills it in. D16's permit half: `(exit code, output tail)`
-    of the permit probe, or None when it could not be started."""
-    return None
+    """D16's permit half: `(exit code, output tail)` of the permit probe, or
+    None when it could not be started or did not finish.
+
+    Not a bool, because the tail is what tells the refusals apart: a dead
+    proxy (403, 20s of retries) and a bad token (401, 3s) print the same
+    `Failed to authenticate` prefix and differ only in the status. The
+    environment is inherited - that is how the token crosses.
+    """
+    try:
+        proc = subprocess.run(
+            permit_probe_argv(network, image), capture_output=True, text=True,
+            check=False, timeout=PERMIT_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.returncode, (proc.stdout + proc.stderr)[-AGENT_TAIL:]
 
 
-def validate_network(sandbox: str, network: str | None, image: str = DEFAULT_IMAGE,
-                     dry_run: bool = False) -> list[str]:
-    """Refuse a --network the harness cannot back with docker's own answer.
+def validate_network(  # noqa: PLR0912  # one refusal per branch, cheapest first; the order is pinned
+    sandbox: str, network: str | None, image: str = DEFAULT_IMAGE, dry_run: bool = False,
+) -> list[str]:
+    """Refuse a docker-tier run the harness cannot back with its own measurement.
+
+    Every docker-tier refusal lives here, so the queue calling it once at plan
+    time and the session calling it from preflight get the same checks from one
+    function. Cheapest first, and each one's message is about its own cause,
+    because every way the tier can be misconfigured - no route to the model, a
+    dead proxy, a stale image, an expired token, a token never exported -
+    otherwise surfaces as the same 15-retry storm at 3am.
 
     The default tier asserts nothing, so it asks nothing: probing on every run
     would let an unrelated docker problem refuse sessions that never needed
-    docker. Once a name is given the prompt is going to tell the agent it has
-    no internet egress, and network_rule's rule applies - the claim is only
-    allowed because this measured it. An 'isolated' network with a gateway
-    answers "false" and is refused here rather than lied about later.
+    docker. Once a name is given the prompt is going to tell the agent its only
+    egress is the model API, and network_rule's rule applies - the claim is only
+    allowed because this measured it: docker calls the network internal, a bare
+    container on it reaches nothing, the proxy refuses a host off the allowlist
+    and `claude -p` itself gets through it with the token the agent will hold.
+
+    Returns the names of the checks it skipped: empty, unless `dry_run`. A
+    dry-run exists to print the prompt, and the proxy probes would start a
+    container and spend a model turn to do it, so it stops after the isolation
+    check - and says so, so nobody is told a network was validated when half of
+    the validation did not happen.
     """
     if network is None:
+        if sandbox == "docker":
+            raise Abort(
+                "--sandbox docker without --network runs the container with "
+                "--network none, where the CLI cannot reach the model at all: that "
+                "branch can never run a real agent, and its symptom is a retry storm "
+                "at the agent timeout. Name an internal network with --network "
+                "(create one with: docker network create --internal <name>)."
+            )
         return []
     if sandbox != "docker":
         raise Abort(
@@ -239,14 +384,89 @@ def validate_network(sandbox: str, network: str | None, image: str = DEFAULT_IMA
             "enforces. Re-create it with: "
             f"docker network create --internal {network}"
         )
+
+    # Internal is docker's word; egress is the measurement. A forwarding
+    # process on the network is a route out whatever the network is called.
+    egress = docker_network_egress(network, image)
+    if egress is None:
+        raise Abort(
+            f"the egress probe could not be run on network {network!r} (image "
+            f"{image!r} missing, or docker could not start a container on it). "
+            "Its egress was not measured, so its isolation will not be promised "
+            "to the agent."
+        )
+    if egress:
+        raise Abort(
+            f"network {network!r} has egress: an unconfigured container on it "
+            "reached the internet, whatever docker calls the network. Something on "
+            "it is forwarding. Attaching to it would put an isolation claim in "
+            "every prompt that nothing enforces."
+        )
+    if dry_run:
+        return list(DRY_RUN_SKIPS)
+
+    # The token gates only the permit probe, so it sits beside it rather than
+    # among the plain refusals: `docker run -e VAR` with VAR unset passes
+    # nothing and raises no error, and 'unset' deserves a better message than
+    # a failed API call - the variable, and the command that mints it.
+    if not os.environ.get(TOKEN_VAR):
+        raise Abort(
+            f"{TOKEN_VAR} is not set. The agent container gets its credential only "
+            "through this variable, and docker passes an unset -e silently, so the "
+            "agent would start with no credential and no warning. Mint one with "
+            f"'claude setup-token' and export {TOKEN_VAR}."
+        )
+
+    # The proxy, both directions. Refusal first: it is cheap, and the permit
+    # probe spends a model turn.
+    refuses = proxy_refuses(network, image)
+    if refuses is None:
+        raise Abort(
+            f"the egress proxy for network {network!r} could not be probed from a "
+            f"container on it (no proxy at {proxy_url(network)}, or no container to "
+            "ask from). A boundary nobody measured is not promised."
+        )
+    if not refuses:
+        raise Abort(
+            f"the egress proxy for network {network!r} permitted a CONNECT to a "
+            "host outside its allowlist. That is a hole in the boundary, not a "
+            "tier; rebuild the proxy image and re-run."
+        )
+    permitted = proxy_permits(network, image)
+    if permitted is None:
+        raise Abort(
+            f"the permit probe ('claude -p' through the egress proxy on network "
+            f"{network!r}) could not be run, or did not finish within "
+            f"{PERMIT_PROBE_TIMEOUT_S}s. Whether the proxy permits the model API "
+            "was not measured."
+        )
+    code, tail = permitted
+    if code != 0:
+        raise Abort(
+            f"'claude -p' through the egress proxy on network {network!r} exited "
+            f"{code}: either the proxy does not permit the model API or the token "
+            "is not valid, and its output says which (a 403 is the proxy, a 401 "
+            f"the token):\n{tail}"
+        )
     return []
 
 
 def deny_enforcement(ticket: dict, sandbox: str) -> dict[str, str]:
-    """STUB - T016 fills it in. Which half of `network_access: deny` this run
-    enforces: the agent container, mechanically or advisorily, and the
-    verifier, always advisorily."""
-    return {}
+    """Which half of `network_access: deny` this run enforces. Pure.
+
+    Two claims, not one. On the agent container it is mechanical under docker
+    and a sentence in a prompt otherwise. On the verifier it is EDAD_NETWORK=deny,
+    a string a cooperating suite may honour, and nothing more (D8) - so it is
+    always advisory. The session log carries the answer per run, so nobody
+    reads 'deny' in a ticket and assumes both.
+    """
+    requested = (ticket.get("kill_conditions") or {}).get("network_access") == "deny"
+    if not requested:
+        return {"agent": "not requested", "verifier": "not requested"}
+    return {
+        "agent": "enforced" if sandbox == "docker" else "advisory",
+        "verifier": "advisory",
+    }
 
 
 def agent_has_credential() -> bool | None:
@@ -314,18 +534,20 @@ def network_rule(sandbox: str, cont_indent: str = "", network: str | None = None
     exactly the lie the initial prompt is careful not to tell on iteration 1.
 
     The named tier is the same rule applied a third time. The container is on a
-    network, so "--network none" would be false; it still cannot leave that
-    network, because validate_network refused to start unless docker called it
-    internal. Both halves are said, because an agent told only "no internet"
-    will not think to reach the service it was given.
+    network, so "--network none" would be false; and "no internet egress" would
+    be a lie by omission, because there is one route out - the model API, via
+    the proxy - and an agent told there is none will not understand why the
+    model answers. So the sentence says what validate_network has just
+    measured: the services on the network, the one route out, and nothing else.
     """
     if sandbox == "docker" and network is not None:
         lines = [
             f"You are attached to the docker network {network}: services on it are",
             "reachable by container name (for example a database at its container",
-            "name, on its own port). You have no internet egress - the network is",
-            "internal, and this was confirmed with docker before the run started.",
-            "Do not attempt installs or downloads.",
+            "name, on its own port). Your only egress is the model API, via the",
+            "egress proxy on that network; nothing else on the internet is",
+            "reachable. The network is internal and the proxy's allowlist was",
+            "measured before the run started. Do not attempt installs or downloads.",
         ]
     elif sandbox == "docker":
         lines = [
@@ -421,6 +643,16 @@ def agent_argv(  # noqa: PLR0913  # a pure argv builder: six independent inputs,
     is keyword-defaulted last so every existing positional call is unchanged,
     and exactly one --network is emitted either way: docker accepts the flag
     twice and silently keeps one, so a second would not be a stricter run.
+
+    On a network the container is pointed at the egress proxy - both HTTPS_PROXY
+    and HTTP_PROXY, because the CLI honours the first and a stray plain-HTTP call
+    would otherwise try to leave directly - and nonessential traffic is off, which
+    drops the telemetry host entirely and is what makes the allowlist one entry.
+    Set for the container, not exported here: in the harness's own environment it
+    would silence telemetry for the operator's interactive CLI too.
+
+    The no-network docker argv is unchanged. validate_network refuses that
+    combination one step earlier; this builder stays pure.
     """
     override = os.environ.get("EDAD_AGENT_CMD")
     base = shlex.split(override) if override else ["claude", "-p"]
@@ -429,6 +661,14 @@ def agent_argv(  # noqa: PLR0913  # a pure argv builder: six independent inputs,
 
     if sandbox != "docker":
         return inner
+    egress: list[str] = []
+    if network is not None:
+        url = proxy_url(network)
+        egress = [
+            "-e", f"HTTPS_PROXY={url}",
+            "-e", f"HTTP_PROXY={url}",
+            "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        ]
     return [
         "docker", "run", "--rm",
         # No name: the deny in kill_conditions, made real. A name: a network
@@ -436,7 +676,10 @@ def agent_argv(  # noqa: PLR0913  # a pure argv builder: six independent inputs,
         "--network", network if network is not None else "none",
         "-v", f"{workdir}:/work",
         "-w", "/work",
-        "-e", "CLAUDE_CODE_OAUTH_TOKEN",
+        # The bare -e NAME form: the value crosses from the environment and is
+        # never an element of this list, so it reaches no process listing or log.
+        "-e", TOKEN_VAR,
+        *egress,
         image,
         *inner,
     ]
@@ -641,10 +884,35 @@ def promote_evidence(root: Path, wt: Path, ticket_id: str, rec: Record) -> Path:
     return dest
 
 
-def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the flow
+def cmd_run(args) -> int:
+    """The proxy's lifecycle around the session (D17, the session half).
+
+    Ensure before preflight, because the proxy must exist before
+    validate_network can probe it; remove in a `finally` around everything that
+    follows, because a refusal for any later reason - no lock, dirty tree - has
+    already created a container that a teardown at the end of the session would
+    never reach. Only if this call created it: a child of the queue finds the
+    queue's proxy present and must leave it for the sessions after it. A
+    dry-run starts no proxy, since it runs none of the checks that need one.
+    """
     root = repo_root()
     ticket = load_ticket(root, args.ticket)
-    preflight(root, ticket, args.sandbox, args.dry_run, args.network)
+    created = False
+    if args.sandbox == "docker" and args.network is not None and not args.dry_run:
+        try:
+            created = ensure_egress_proxy(args.network)
+        except EgressError as e:
+            raise Abort(f"the egress proxy for network {args.network!r} could not "
+                        f"be ensured: {e}") from e
+    try:
+        return run_session(root, ticket, args)
+    finally:
+        if created:
+            remove_egress_proxy(args.network)
+
+
+def run_session(root: Path, ticket: dict, args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the flow
+    skipped = preflight(root, ticket, args.sandbox, args.dry_run, args.network, args.image)
 
     base = git(root, "rev-parse", "HEAD")
     wt, branch = make_worktree(root, ticket["id"], base)
@@ -654,12 +922,17 @@ def cmd_run(args) -> int:  # noqa: PLR0915  # linear driver; splitting hides the
         base_commit=base,
         branch=branch,
         sandbox=args.sandbox,
+        network=args.network,
+        network_access=deny_enforcement(ticket, args.sandbox),
     )
 
     prompt = initial_prompt(ticket, args.sandbox, args.network)
     if args.dry_run:
         print(prompt)
-        print(f"\n[dry-run] worktree {wt} on {branch}; no agent invoked")
+        # Say what was not checked, or the operator reads a printed prompt as a
+        # validated network when half of the validation did not happen.
+        unchecked = f"; skipped checks: {', '.join(skipped)}" if skipped else ""
+        print(f"\n[dry-run] worktree {wt} on {branch}; no agent invoked{unchecked}")
         return 0
 
     max_iter = (ticket.get("kill_conditions") or {}).get("max_iterations", 6)
