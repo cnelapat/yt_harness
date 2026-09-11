@@ -1,2 +1,11 @@
-# STUB - T015 fills it in.
+# The egress proxy image: the checked-in daemon and an interpreter, nothing
+# fetched at build time. The harness does not build it; build it yourself with
+#
+#   docker build -f Dockerfile.egress -t edad-egress:latest .
+#
+# and `ensure_egress_proxy` refuses, naming that command, while it is absent.
 FROM python:3.12-slim
+COPY edad/__init__.py edad/egress_proxy.py /app/edad/
+WORKDIR /app
+EXPOSE 3128
+CMD ["python3", "-u", "-m", "edad.egress_proxy"]
