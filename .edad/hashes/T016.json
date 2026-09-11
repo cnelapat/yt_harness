@@ -1,0 +1,171 @@
+{
+  "tests/test_session_network.py": "97c8ee246770bcc2f8e0bf93efe30cc373f9f3dcf044d0c5c60f7502666bb47f",
+  "_edad": {
+    "approved_at": "2026-09-11T15:03:47.363813+00:00",
+    "ticket_sha256": "0b7a00beedddc51211a1494530c7a361d052e3fdac2ff00996d3ab96e17ff2b2",
+    "decisions": [
+      "D8",
+      "D9",
+      "D10",
+      "D11",
+      "D15",
+      "D16",
+      "D17",
+      "D18"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_docker_without_a_network_is_refused_at_preflight -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_docker_without_a_network_is_refused_at_preflight"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_the_default_tier_asks_docker_nothing -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_the_default_tier_asks_docker_nothing"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_a_network_with_measured_egress_is_refused -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_a_network_with_measured_egress_is_refused"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_an_egress_probe_that_could_not_run_is_refused -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_an_egress_probe_that_could_not_run_is_refused"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_an_internal_network_is_accepted -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_an_internal_network_is_accepted"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_docker_without_an_oauth_token_is_refused_naming_setup_token -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_docker_without_an_oauth_token_is_refused_naming_setup_token"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_the_token_value_never_appears_in_argv -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_the_token_value_never_appears_in_argv"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_a_proxy_that_permits_a_non_allowlisted_host_is_refused -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_a_proxy_that_permits_a_non_allowlisted_host_is_refused"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_a_proxy_that_refuses_the_model_api_is_refused -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_a_proxy_that_refuses_the_model_api_is_refused"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_the_permit_probe_uses_the_token_and_image_the_agent_will_hold -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_the_permit_probe_uses_the_token_and_image_the_agent_will_hold"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_the_agent_container_is_pointed_at_the_proxy -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_the_agent_container_is_pointed_at_the_proxy"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_nonessential_traffic_is_disabled_in_the_container -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_nonessential_traffic_is_disabled_in_the_container"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_the_named_tier_rule_names_the_proxy_as_the_only_egress -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_the_named_tier_rule_names_the_proxy_as_the_only_egress"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_a_standalone_session_creates_and_removes_its_own_proxy -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_a_standalone_session_creates_and_removes_its_own_proxy"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_a_session_leaves_a_proxy_it_found_already_present -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_a_session_leaves_a_proxy_it_found_already_present"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_the_session_log_records_which_half_of_the_deny_was_enforced -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_the_session_log_records_which_half_of_the_deny_was_enforced"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_network.py::test_a_dry_run_runs_the_isolation_check_only_and_says_so -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_network.py::test_a_dry_run_runs_the_isolation_check_only_and_says_so"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-11T15:03:43.947792+00:00",
+      "commit": "e80895a94a4d740249d3bd9adda7752198265758",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_session_network.py::test_an_internal_network_is_accepted": 1,
+            "pytest:tests/test_session_network.py::test_the_default_tier_asks_docker_nothing": 1,
+            "pytest:tests/test_session_network.py::test_docker_without_a_network_is_refused_at_preflight": 1,
+            "pytest:tests/test_session_network.py::test_a_network_with_measured_egress_is_refused": 1,
+            "pytest:tests/test_session_network.py::test_an_egress_probe_that_could_not_run_is_refused": 1,
+            "pytest:tests/test_session_network.py::test_docker_without_an_oauth_token_is_refused_naming_setup_token": 1,
+            "pytest:tests/test_session_network.py::test_the_token_value_never_appears_in_argv": 1,
+            "pytest:tests/test_session_network.py::test_a_proxy_that_permits_a_non_allowlisted_host_is_refused": 1,
+            "pytest:tests/test_session_network.py::test_a_proxy_that_refuses_the_model_api_is_refused": 1,
+            "pytest:tests/test_session_network.py::test_the_permit_probe_uses_the_token_and_image_the_agent_will_hold": 1,
+            "pytest:tests/test_session_network.py::test_the_agent_container_is_pointed_at_the_proxy": 1,
+            "pytest:tests/test_session_network.py::test_nonessential_traffic_is_disabled_in_the_container": 1,
+            "pytest:tests/test_session_network.py::test_the_named_tier_rule_names_the_proxy_as_the_only_egress": 1,
+            "pytest:tests/test_session_network.py::test_a_standalone_session_creates_and_removes_its_own_proxy": 1,
+            "pytest:tests/test_session_network.py::test_a_session_leaves_a_proxy_it_found_already_present": 1,
+            "pytest:tests/test_session_network.py::test_the_session_log_records_which_half_of_the_deny_was_enforced": 1,
+            "pytest:tests/test_session_network.py::test_a_dry_run_runs_the_isolation_check_only_and_says_so": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
