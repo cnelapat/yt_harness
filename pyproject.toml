@@ -4,10 +4,6 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-# legacy/ is the deliberate "before" fixture: a bad script preserved to be
-# replaced. Linting it makes full_gate unwinnable, since no ticket may touch
-# a file outside its scope — and an unwinnable gate promotes no evidence.
-exclude = ["legacy"]
 
 [tool.ruff.lint]
 # Pinned explicitly. Ruff's defaults change between releases, so an unpinned
@@ -17,9 +13,8 @@ select = ["E", "F", "W", "I", "UP", "B", "PL", "RUF"]
 ignore = ["PLR2004"]  # magic-value comparisons; too noisy for parsing code
 
 [tool.ruff.lint.isort]
-# Without this, ruff groups `ytmp3` and `edad` as third-party and demands the
-# frozen acceptance test's imports be reordered — a lint error in a file no
-# ticket may edit, which makes full_gate unwinnable. The blank line in that
-# file is correct as written; the linter just did not know which packages are
-# ours. Telling it the truth is the fix, not editing a hash-locked file.
-known-first-party = ["ytmp3", "edad"]
+# Without this, ruff groups `edad` as third-party and demands a frozen test's
+# imports be reordered — a lint error in a file no ticket may edit, which makes
+# full_gate unwinnable. Telling the linter which package is ours is the fix,
+# not editing a hash-locked file.
+known-first-party = ["edad"]
