@@ -1,0 +1,69 @@
+{
+  "ticket": "T014",
+  "started_at": "2026-09-11T16:16:21.275757+00:00",
+  "commit": "72471a6553cb566f3169f637c1d8898dc4c61e74",
+  "base_ref": "43d780fc60cbfd4733ce337c86c162a46561182c",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "edad/session_queue.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 14.65,
+      "output_tail": "........................................................................ [ 33%]\n........................................................................ [ 66%]\n.......................................................................  [100%]\n215 passed in 14.47s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.05,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D5"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_consecutive_logless_sessions_stop_the_night -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_consecutive_logless_sessions_stop_the_night"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_a_logless_session_still_resets_the_no_progress_count -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_a_logless_session_still_resets_the_no_progress_count"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_session_queue.py::test_the_logless_breaker_is_recorded_as_a_breaker_not_a_failure -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_session_queue.py::test_the_logless_breaker_is_recorded_as_a_breaker_not_a_failure"
+      ]
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "passed": true,
+  "passed_modulo_baseline": false
+}
