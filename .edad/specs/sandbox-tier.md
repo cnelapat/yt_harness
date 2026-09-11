@@ -227,6 +227,12 @@ each, and the Decisions preamble says how a spanning decision is sliced across t
     bare `-e CLAUDE_CODE_OAUTH_TOKEN` form and the value is never in argv even when the
     variable is set; that the named tier's prompt sentence says egress is the model API
     via the proxy and nothing else.
+  - **D19, added 2026-09-11**: that the docker argv carries
+    `--dangerously-skip-permissions` and no `--permission-mode`; that the host argv
+    carries `--permission-mode acceptEdits` and `--allowedTools` built from the ticket's
+    commands, with the prompt ahead of it; that `--yolo` on the host bypasses; that
+    `allowed_tools()` is pure and `SessionLog` carries `permissions`. Its frozen file is
+    new, `tests/test_session_permissions.py`, so T016's frozen file is untouched.
   - **Discharges**: D9, D15 (the container-env half), D18 (the argv half), D17 (the
     session half — a standalone session creates and removes its own proxy, leaves one it
     found — is observed at `cmd_run`, reached through the same imported names as
@@ -458,11 +464,47 @@ between iterations, a halving for the same non-failure; hardening the accept loo
 change to the boundary's one-screen file. Re-open on the first session log that shows a
 dead proxy.
 
+**The agent's permissions, settled 2026-09-11 by the operator after the tier's first
+night (D19).** The grill's worry was right and understated. `--permission-mode
+acceptEdits` under `claude -p` has nobody to answer a prompt, so every Bash call is
+denied — in the container *and* on the host. T014's agent, in docker, ended with "I
+could not actually run the three acceptance tests, the full frozen suite, or ruff
+myself"; T013's, on the host, "traced each of the ten tests against the diff by hand".
+Every ticket T001–T016 passed its gate on an agent that never ran a test. Nothing is
+re-run: the gate is the verdict, not the agent, and this is that thesis holding under a
+condition nobody intended. But a one-iteration pass on a small ticket hides a blind
+agent, and a multi-iteration brownfield refactor will not.
+
+The decision is one rule per tier, because the two tiers have different boundaries.
+Under `--sandbox docker` the container *is* the boundary — model-API-only egress (D14,
+D15), the worktree as the only mount, and a `.git` file that points at a host path so git
+inside cannot rewrite anything — and `acceptEdits` there was not a safeguard but a
+crippled agent. The CLI runs with `--dangerously-skip-permissions`, unconditionally.
+Measured: the CLI refuses that flag as root ("cannot be used with root/sudo privileges")
+and `Dockerfile.agent` has no `USER` line, so the image gains a non-root user with a
+writable `HOME`; `IS_SANDBOX=1`, which the CLI also honours, is rejected as an
+undocumented escape hatch where a `USER` line is the honest fix. On the host there is no
+boundary. The agent keeps `acceptEdits` and gets `--allowedTools` naming the ticket's own
+gate commands: each `acceptance` and `full_gate` command exactly, as `Bash(<command>)`,
+plus `Bash(<tokens through pytest>:*)` for every command that invokes pytest, so it can
+run one node id. Measured on the host: an unlisted `python3 -c` and `curl` are denied, a
+listed `echo` runs — and `--allowedTools` is variadic, so the prompt must precede it in
+argv or the CLI reports no prompt was given. Two limits, stated: the operator's own
+`~/.claude/settings.json` allow rules apply to a host-tier agent as well, so the
+allowlist is a floor and not a ceiling; and a gate command that is itself a shell
+(`bash -c "..."`) hands the agent a shell, which is an authoring rule for `to-tickets`
+rather than something the builder can detect. `--yolo` stays the host-tier opt-in for
+bypass and does nothing under docker, where bypass is already the rule. The session log
+records `permissions: {mode, allowed}` beside `network_access`, so a log says what the
+agent could *do* and not only where it could reach. Rejected: passing `--yolo` through
+the queue, where every night without the flag silently repeats the blind agent; and an
+allowlist inside the container, which forbids `ls`, `grep` and a scratch script for no
+gain the container is not already giving.
+
 **Carried open from the grill, unchanged.**
-- `--image` and `--yolo` pass-through on the queue. `--yolo` is "only meaningful with
-  `--sandbox docker`", and without it the container runs `--permission-mode acceptEdits`,
-  which auto-accepts edits but not commands — so a sandboxed agent may be unable to run
-  its own checks. Not measured, because the tier has never run. Re-raise when T015 lands.
+- `--image` pass-through on the queue. (`--yolo` was carried here too; measured after the
+  tier's first night and settled as D19, below — the agent could not run its checks, in
+  either tier.)
 - Token minting and rotation (above, under Out of scope).
 - What happens when the CLI's required hosts change. D15 pins one measured entry; a
   future release needing a second host fails as the retry storm, caught by D16 at plan
@@ -729,10 +771,30 @@ decisions:
     seam: session-preflight, session-builders
     rejected: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR — a real first-class auth source, but docker run does not forward file descriptors into a container; the residual exposure of the env form (docker inspect, /proc inside the container) is accepted because the agent needs the credential to function"
 
+  - id: D19
+    decision: "The agent can run its own checks, one rule per tier. Under `--sandbox docker` the container is the permission boundary and the CLI runs with `--dangerously-skip-permissions` unconditionally; the agent image runs as a non-root user because the CLI refuses that flag as root. On the host the agent keeps `--permission-mode acceptEdits` and gets `--allowedTools` naming the ticket's own gate commands — each `acceptance` and `full_gate` command exactly as `Bash(<command>)`, plus `Bash(<tokens through pytest>:*)` for each command that invokes pytest — with the prompt placed ahead of the variadic flag; `--yolo` stays the host-tier opt-in for bypass. The session log records `permissions: {mode, allowed}` beside `network_access`. Settled 2026-09-11 from the session logs of the tier's first night: every ticket to date was implemented by an agent that could not run a command."
+    verify:
+      - python3 -m pytest tests/test_session_permissions.py::test_docker_bypasses_permissions_whatever_yolo_says -q
+      - python3 -m pytest tests/test_session_permissions.py::test_the_host_tier_accepts_edits_and_allows_the_gate_commands_with_the_prompt_first -q
+      - python3 -m pytest tests/test_session_permissions.py::test_yolo_on_the_host_bypasses -q
+      - python3 -m pytest tests/test_session_permissions.py::test_allowed_tools_names_each_gate_command_once_and_a_pytest_prefix -q
+      - python3 -m pytest tests/test_session_permissions.py::test_permissions_says_what_the_agent_could_do_per_tier -q
+      - python3 -m pytest tests/test_session_permissions.py::test_the_session_log_records_permissions_beside_network_access -q
+      - python3 -m pytest tests/test_session_permissions.py::test_the_agent_image_does_not_run_as_root -q
+      - EDAD_DOCKER_TESTS=1 python3 -m pytest docker_tests/test_properties.py::test_the_agent_image_accepts_the_bypass_flag_as_its_user -q   # hand-run, after the image is rebuilt
+    frozen:
+      - tests/test_session_permissions.py
+      - docker_tests/test_properties.py
+    scope:
+      - edad/session.py
+      - Dockerfile.agent
+    seam: session-builders, docker-property
+    rejected: "`--yolo` passed through the queue — the operator opts in per night and every night without the flag silently repeats the blind agent; an allowlist inside the container — forbids ls, grep and a scratch script in a container that is already the boundary; `IS_SANDBOX=1` to run bypass as root — an undocumented escape hatch where a `USER` line is the honest fix"
+
 deferred:
   - "N for the logless breaker (D5): spec-stage default MAX_NO_PROGRESS; confirm before T014 is approved"
   - "what ensure_egress_proxy does when the image is absent: spec-stage default is refuse naming the build command; re-grill if the harness should build it"
-  - "--image and --yolo pass-through on the queue, and whether acceptEdits inside the container lets the agent run its own checks; re-raise when T015 lands"
+  - "--image pass-through on the queue (--yolo and acceptEdits settled as D19)"
   - "re-measuring the allowlist against a new CLI release; D7's property test is the natural home and does not do it"
   - "verifier-side network enforcement; D8 records, does not enforce"
   - "--dry-run under --sandbox docker: spec-stage default is isolation check only, probes skipped and said so; confirm before T016"

@@ -627,9 +627,19 @@ and the frozen tests stay untouched.
 # --- agent invocation ------------------------------------------------------
 
 
-def agent_argv(  # noqa: PLR0913  # a pure argv builder: six independent inputs, not six jobs
+def allowed_tools(ticket: dict) -> list[str]:
+    """The host tier's `--allowedTools` patterns, from the ticket's own gate commands (D19)."""
+    return []
+
+
+def permissions(sandbox: str, yolo: bool, ticket: dict) -> dict:
+    """What the agent could do this run, for the session log (D19)."""
+    return {"mode": "", "allowed": None}
+
+
+def agent_argv(  # noqa: PLR0913  # a pure argv builder: seven independent inputs, not seven jobs
     prompt: str, workdir: Path, sandbox: str, image: str, yolo: bool,
-    network: str | None = None,
+    network: str | None = None, allowed: list[str] | None = None,
 ) -> list[str]:
     """Build the agent command.
 

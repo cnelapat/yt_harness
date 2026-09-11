@@ -163,3 +163,15 @@ def test_the_real_proxy_image_permits_only_the_model_api(sandbox):
     assert out["connect"][f"{allowed}:443"] == "HTTP/1.1 200 Connection Established"
     assert out["connect"]["example.com:443"] == "HTTP/1.1 403 Forbidden"
     assert out["connect"]["1.1.1.1:443"] == "HTTP/1.1 403 Forbidden"
+
+
+def test_the_agent_image_accepts_the_bypass_flag_as_its_user():
+    # D19. Measured before the fix: as root the CLI refuses the flag outright.
+    # With no network and no token the CLI stops at "Not logged in" instead,
+    # which is exactly the point: it got past the root check. Rebuild the
+    # image before running this - it tests what is built, not what is written.
+    out = docker("run", "--rm", "--network", "none", "edad-agent:latest", "sh", "-c",
+                 "id -u; claude -p --dangerously-skip-permissions 'say ok' 2>&1 | head -1")
+    uid, _, first_line = out.partition("\n")
+    assert uid != "0", "the agent image still runs as root"
+    assert "root" not in first_line, first_line
