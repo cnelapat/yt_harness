@@ -1,5 +1,7 @@
-# Sandbox for unattended runs. Built once; `--network none` at run time is what
-# makes the ticket's network_access: deny real rather than advisory.
+# Sandbox for unattended runs. Built once. A ticket's `network_access: deny` is
+# enforced on this container — `--network none`, or an internal net whose only
+# way out is the CONNECT-allowlist proxy (edad/egress_proxy.py) — and advisory
+# for the verifier, which runs on the host and sees only EDAD_NETWORK=deny.
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git nodejs npm \
     && rm -rf /var/lib/apt/lists/*

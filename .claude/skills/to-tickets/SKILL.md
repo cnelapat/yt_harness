@@ -266,7 +266,10 @@ diff touches nothing outside `scope`.
   the baseline needs `--rebaseline`: re-approving after the repo has picked up new
   failures is refused by default, because silently adopting them makes the gate certify
   the breakage it exists to catch.
-- **Commands must not need the network** when `network_access: deny`.
+- **Commands must not need the network** when `network_access: deny`. The deny is
+  enforced on the agent container under `--sandbox docker` (no route out except the
+  model-API proxy) and *advisory* for the verifier, which runs gate commands on the
+  host with `EDAD_NETWORK=deny` set and nothing stopping a suite that ignores it.
 - **Keep `max_diff_lines` honest.** Too tight kills good work mid-flight; too loose
   lets an agent rewrite the repo.
 - **`decisions` is copied, not checked.** The gate carries the ids into the lock and
