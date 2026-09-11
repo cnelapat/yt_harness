@@ -270,6 +270,10 @@ diff touches nothing outside `scope`.
   enforced on the agent container under `--sandbox docker` (no route out except the
   model-API proxy) and *advisory* for the verifier, which runs gate commands on the
   host with `EDAD_NETWORK=deny` set and nothing stopping a suite that ignores it.
+- **A gate command must not itself be a shell.** On the host the agent is allowed
+  exactly the ticket's `acceptance` and `full_gate` commands (D19 of the sandbox tier),
+  so `bash -c "..."` or `sh script.sh` as a gate command hands it a shell. Name the
+  runner directly: `python3 -m pytest ...`, `ruff check .`, `make test`.
 - **Keep `max_diff_lines` honest.** Too tight kills good work mid-flight; too loose
   lets an agent rewrite the repo.
 - **`decisions` is copied, not checked.** The gate carries the ids into the lock and
