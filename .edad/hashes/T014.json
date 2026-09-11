@@ -1,0 +1,52 @@
+{
+  "tests/test_session_queue.py": "4a01b82e32e773014820486a1c4889b761d91242d9ddf9f03bbc8c4eba331669",
+  "_edad": {
+    "approved_at": "2026-09-11T16:09:37.178342+00:00",
+    "ticket_sha256": "0a1cb1298b7d1f8fffbe342c499ab805da341f20dfb16808920b3a47abe06cb0",
+    "decisions": [
+      "D5"
+    ],
+    "red_proof": [
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_consecutive_logless_sessions_stop_the_night -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_consecutive_logless_sessions_stop_the_night"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_a_logless_session_still_resets_the_no_progress_count -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_a_logless_session_still_resets_the_no_progress_count"
+        ]
+      },
+      {
+        "command": "python3 -m pytest tests/test_session_queue.py::test_the_logless_breaker_is_recorded_as_a_breaker_not_a_failure -q",
+        "exit_code": 1,
+        "detected_by": [
+          "tests/test_session_queue.py::test_the_logless_breaker_is_recorded_as_a_breaker_not_a_failure"
+        ]
+      }
+    ],
+    "mutation_proof": null,
+    "full_gate_baseline": {
+      "taken_at": "2026-09-11T16:09:35.703950+00:00",
+      "commit": "647b5cacbc6320a4ecc1efd11ae2784fd94e3ebb",
+      "commands": {
+        "python3 -m pytest -q": {
+          "exit_code": 1,
+          "keys": {
+            "pytest:tests/test_session_queue.py::test_consecutive_logless_sessions_stop_the_night": 1,
+            "pytest:tests/test_session_queue.py::test_a_logless_session_still_resets_the_no_progress_count": 1,
+            "pytest:tests/test_session_queue.py::test_the_logless_breaker_is_recorded_as_a_breaker_not_a_failure": 1
+          }
+        },
+        "ruff check .": {
+          "exit_code": 0,
+          "keys": {}
+        }
+      }
+    }
+  }
+}
