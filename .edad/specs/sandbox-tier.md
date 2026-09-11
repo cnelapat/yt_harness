@@ -441,6 +441,23 @@ would start a proxy and spend a model turn to print a prompt. The spec-stage def
 that dry-run runs the isolation check only and says the probes were skipped — but that
 is a call, not a derivation, and is listed under `deferred:`.
 
+**The proxy's restart policy, settled 2026-09-11 by the operator after the tier's
+first night: none, and the deferred line that asked for one overstated the exposure.**
+A proxy that dies mid-night is not caught "after up to ~an hour" by the queue's
+breakers — it is `--rm`'d away, so the next child session's own `ensure_egress_proxy`
+finds it absent and starts a fresh one, and `preflight` permit-probes it. The
+between-ticket health check the line offered as the alternative therefore exists by
+construction. The only exposure is mid-ticket: the agent's CLI storms against a dead
+proxy for `AGENT_TIMEOUT_S`, twice, until `MAX_NO_PROGRESS` aborts the session — about
+30 minutes and one ticket left undone, after which the night continues. Accepted. The
+only in-daemon crash path is an unguarded `OSError` from `serve()`'s `accept()`, which
+needs fd exhaustion that one agent's traffic cannot produce; everything else is the host
+killing the container, which no docker flag survives. Rejected: `--restart on-failure`,
+because it conflicts with `--rm` and reopens the reason `--rm` was chosen; re-ensuring
+between iterations, a halving for the same non-failure; hardening the accept loop, a
+change to the boundary's one-screen file. Re-open on the first session log that shows a
+dead proxy.
+
 **Carried open from the grill, unchanged.**
 - `--image` and `--yolo` pass-through on the queue. `--yolo` is "only meaningful with
   `--sandbox docker`", and without it the container runs `--permission-mode acceptEdits`,
@@ -720,5 +737,4 @@ deferred:
   - "verifier-side network enforcement; D8 records, does not enforce"
   - "--dry-run under --sandbox docker: spec-stage default is isolation check only, probes skipped and said so; confirm before T016"
   - "two standalone sessions on one network race on ensure; the queue is single-owner and safe, standalone-concurrent is not — a sentence in T015's body, not a design"
-  - "the proxy container has no restart policy; a daemon crash mid-night is caught by the existing no-progress breakers after up to ~an hour — accept, or grill --restart on-failure"
 ```
