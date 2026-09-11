@@ -628,13 +628,42 @@ and the frozen tests stay untouched.
 
 
 def allowed_tools(ticket: dict) -> list[str]:
-    """The host tier's `--allowedTools` patterns, from the ticket's own gate commands (D19)."""
-    return []
+    """The host tier's `--allowedTools` patterns, from the ticket's own gate commands (D19).
+
+    Each acceptance then full_gate command names itself exactly, and - when it
+    runs pytest - is followed by a `:*` prefix pattern through the first
+    `pytest` token, so the agent can pick its own node id rather than being
+    confined to the one the ticket happened to write. No duplicates: a pattern
+    already emitted, exact command or prefix, is not emitted again.
+    """
+    patterns: list[str] = []
+    seen: set[str] = set()
+
+    def add(pattern: str) -> None:
+        if pattern not in seen:
+            seen.add(pattern)
+            patterns.append(pattern)
+
+    commands = list(ticket.get("acceptance") or []) + list(ticket.get("full_gate") or [])
+    for command in commands:
+        add(f"Bash({command})")
+        tokens = command.split()
+        if "pytest" in tokens:
+            prefix = " ".join(tokens[:tokens.index("pytest") + 1])
+            add(f"Bash({prefix}:*)")
+    return patterns
 
 
 def permissions(sandbox: str, yolo: bool, ticket: dict) -> dict:
-    """What the agent could do this run, for the session log (D19)."""
-    return {"mode": "", "allowed": None}
+    """What the agent could do this run, for the session log (D19).
+
+    Bypass inside the container - the boundary is the container, not the
+    permission mode - or whenever `--yolo` was given. Otherwise the host
+    tier's allowlist, built from the ticket's own gate commands.
+    """
+    if sandbox == "docker" or yolo:
+        return {"mode": "bypass", "allowed": None}
+    return {"mode": "allowlist", "allowed": allowed_tools(ticket)}
 
 
 def agent_argv(  # noqa: PLR0913  # a pure argv builder: seven independent inputs, not seven jobs
@@ -663,11 +692,24 @@ def agent_argv(  # noqa: PLR0913  # a pure argv builder: seven independent input
 
     The no-network docker argv is unchanged. validate_network refuses that
     combination one step earlier; this builder stays pure.
+
+    Permissions follow the tier (D19). Inside the container the boundary is
+    the container, so `acceptEdits` there was a crippled agent rather than a
+    safeguard: bypass is the rule, whatever `--yolo` says. On the host there
+    is no boundary, so edits are accepted and the agent is allowed exactly
+    `allowed` - the ticket's own gate commands - via one `--allowedTools`,
+    unless `--yolo` opts into bypass there too. The flag is variadic, so the
+    prompt precedes it: with the prompt after it, the CLI reports no prompt
+    was given.
     """
     override = os.environ.get("EDAD_AGENT_CMD")
     base = shlex.split(override) if override else ["claude", "-p"]
-    perm = ["--dangerously-skip-permissions"] if yolo else ["--permission-mode", "acceptEdits"]
-    inner = [*base, *perm, prompt]
+    if sandbox == "docker" or yolo:
+        inner = [*base, "--dangerously-skip-permissions", prompt]
+    else:
+        inner = [*base, prompt, "--permission-mode", "acceptEdits"]
+        if allowed:
+            inner += ["--allowedTools", ",".join(allowed)]
 
     if sandbox != "docker":
         return inner
@@ -803,6 +845,7 @@ class SessionLog:
     sandbox: str
     network: str | None = None
     network_access: dict = field(default_factory=dict)
+    permissions: dict = field(default_factory=dict)
     outcome: str = "incomplete"
     abort_reason: str | None = None
     iterations: list[Iteration] = field(default_factory=list)
@@ -934,6 +977,7 @@ def run_session(root: Path, ticket: dict, args) -> int:  # noqa: PLR0915  # line
         sandbox=args.sandbox,
         network=args.network,
         network_access=deny_enforcement(ticket, args.sandbox),
+        permissions=permissions(args.sandbox, args.yolo, ticket),
     )
 
     prompt = initial_prompt(ticket, args.sandbox, args.network)
@@ -954,7 +998,8 @@ def run_session(root: Path, ticket: dict, args) -> int:  # noqa: PLR0915  # line
     try:
         for n in range(1, max_iter + 1):
             print(f"\n--- iteration {n}/{max_iter} ---")
-            argv = agent_argv(prompt, wt, args.sandbox, args.image, args.yolo, args.network)
+            argv = agent_argv(prompt, wt, args.sandbox, args.image, args.yolo, args.network,
+                              allowed=allowed_tools(ticket))
             t0 = time.monotonic()
             exit_code, out = run_agent(argv, wt)
             print(f"agent exited {exit_code} in {round(time.monotonic() - t0)}s")

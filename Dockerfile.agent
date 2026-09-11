@@ -8,4 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git nodejs npm 
 RUN npm install -g @anthropic-ai/claude-code
 COPY requirements-gate.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements-gate.txt
+# The CLI refuses --dangerously-skip-permissions as root, and inside this
+# container that flag is the rule (D19): bypass, not acceptEdits, because the
+# boundary here is the container, not the permission mode.
+RUN useradd --create-home --uid 1000 agent
+USER agent
 WORKDIR /work
