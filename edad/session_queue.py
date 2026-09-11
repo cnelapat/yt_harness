@@ -534,8 +534,13 @@ def no_commit_abort(session_log: dict) -> bool:
     return not any(step.get("made_commit") for step in session_log.get("iterations") or [])
 
 
-def breaker_fired(
-    *, no_commit_aborts: int, elapsed_s: float, budget_s: float | None = None
+# STUB - T014 gives this its meaning: the logless breaker's threshold.
+MAX_LOGLESS = MAX_NO_PROGRESS
+
+
+def breaker_fired(  # STUB - T014 makes `logless` fire "no_log"
+    *, no_commit_aborts: int, elapsed_s: float, budget_s: float | None = None,
+    logless: int = 0,
 ) -> str | None:
     """`"no_progress"`, `"wall_clock"`, or `None`. Pure, keyword-only.
 
@@ -620,6 +625,7 @@ class RunState:
         self.stopped_because: str | None = None
         self.outcomes: dict[str, dict] = {}
         self.no_commit_aborts = 0
+        self.logless = 0  # STUB - T014 counts and resets it in `fail` and `promote`
         self.final_gate: dict | None = None
 
     def elapsed_s(self) -> float:

@@ -1330,3 +1330,106 @@ def test_the_queue_leaves_a_proxy_it_did_not_create(monkeypatch, repo):
     assert session.ran == ["T1", "T2"]
     assert docker.names() == ["ensure", "validate"]
     assert "remove" not in docker.names()
+
+
+# --- the sandbox tier: D5 (the breaker half) --------------------------------
+#
+# T014. `preflight` runs before `SessionLog` is constructed, so a preflight
+# refusal exits 2 with no log - and with T016 preflight refuses for many more
+# reasons, one of them a fixture network that was fine at plan time and torn
+# down at ticket 3 of 12. Every session after it aborts in seconds, writes no
+# log, and the queue drains the rest as instant `failed`s. A night of sessions
+# that write no log at all is an environment failure: a third breaker.
+
+
+def test_consecutive_logless_sessions_stop_the_night(monkeypatch, repo):
+    """N sessions in a row that produced no session log at all stop the night,
+    through a breaker named distinctly from `no_progress` and `wall_clock`. N
+    is the session's own threshold read one level up, the way `no_progress`
+    reads it: one absorbs a transient, two in a row is systematic."""
+    assert sq.MAX_LOGLESS == sq.MAX_NO_PROGRESS
+    assert breaker_fired(no_commit_aborts=0, elapsed_s=0, logless=sq.MAX_LOGLESS) == "no_log"
+    assert breaker_fired(no_commit_aborts=0, elapsed_s=0, logless=sq.MAX_LOGLESS - 1) is None
+    assert breaker_fired(no_commit_aborts=0, elapsed_s=0) is None, "logless defaults to 0"
+
+    # A whole night: the fake never writes a session log, so every failure it
+    # reports is logless. Two of them stop the queue before the third runs.
+    code, session, _, _ = drive(
+        monkeypatch, repo, ["T1", "T2", "T3", "T4"],
+        session=FakeSession(fails=("T1", "T2", "T3", "T4")), catalog=FOUR_INDEPENDENT,
+    )
+
+    assert session.ran == ["T1", "T2"], (
+        f"two logless sessions should have stopped the night; {session.ran} ran"
+    )
+    assert code != 0
+    assert latest_run_log(repo)["breaker"] == "no_log"
+
+
+def test_a_logless_session_still_resets_the_no_progress_count(monkeypatch, repo):
+    """Kept exactly. A logless session is distinguishable evidence, not absent
+    evidence, and the two counters answer different questions: `no_progress`
+    asks whether sessions that ran are committing, `no_log` whether sessions
+    are running at all. So a logless failure resets `no_commit_aborts` as it
+    always did, a logged failure resets `logless`, and alternating the two
+    fires neither."""
+    state = RunState(plan_run(FOUR_INDEPENDENT, ["T1", "T2", "T3", "T4"], set()), FOUR_INDEPENDENT)
+
+    state.fail("T1", session_log=ABORTED_WITHOUT_COMMIT)
+    assert (state.no_commit_aborts, state.logless) == (1, 0)
+
+    state.fail("T2", session_log=None)
+    assert state.no_commit_aborts == 0, "a logless session used to reset this, and still does"
+    assert state.logless == 1, "a logless session is counted, not ignored"
+    assert state.breaker is None
+
+    state.fail("T3", session_log=ABORTED_WITHOUT_COMMIT)
+    assert state.logless == 0, "a session that wrote a log resets the logless count"
+    assert state.no_commit_aborts == 1
+    assert state.breaker is None
+
+    state.fail("T4", session_log=None)
+    assert (state.no_commit_aborts, state.logless) == (0, 1)
+    assert state.breaker is None, "neither counter reached its threshold"
+
+    # A promotion resets both: the night is running and committing.
+    state.promote("T4", merge_sha="abc123")
+    assert (state.no_commit_aborts, state.logless) == (0, 0)
+
+    # "No log" is what `read_new_log` returns both for no file and for a file
+    # it could not parse. Both count: neither is a record the queue can read.
+    corrupt = repo / ".edad" / "sessions" / "T1-partial.json"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_text("{")
+    path, log = sq.read_new_log(set(), {corrupt})
+    assert path is not None and log is None
+
+
+def test_the_logless_breaker_is_recorded_as_a_breaker_not_a_failure(monkeypatch, repo):
+    """The morning reads one environment problem, not nine ticket failures.
+    The run log shows `breaker: "no_log"`, `stopped_because` names it, the
+    tickets that fired it are `failed`, and the tickets it never reached are
+    `not_run` - never `failed`, never `skipped`."""
+    state = RunState(plan_run(FOUR_INDEPENDENT, ["T1", "T2", "T3", "T4"], set()), FOUR_INDEPENDENT)
+
+    state.fail("T1", session_log=None)
+    assert state.breaker is None, "one logless session is a transient, not a breaker"
+    state.fail("T2", session_log=None)
+
+    log = state.as_log()
+    assert log["breaker"] == "no_log"
+    assert log["breaker"] not in ("no_progress", "wall_clock")
+    assert log["stopped_because"] and "no_log" in log["stopped_because"], (
+        f"the breaker fired and the log says {log['stopped_because']!r}"
+    )
+    assert log["tickets"]["T1"]["status"] == "failed"
+    assert log["tickets"]["T2"]["status"] == "failed"
+    for untouched in ("T3", "T4"):
+        assert log["tickets"][untouched]["status"] == "not_run", (
+            f"{untouched} never ran; logging it as "
+            f"{log['tickets'][untouched]['status']!r} sends the morning to debug it"
+        )
+    assert set(log) == {
+        "started_at", "elapsed_s", "sandbox", "network", "tickets",
+        "breaker", "stopped_because", "final_gate",
+    }, "as_log's shape does not otherwise change"
