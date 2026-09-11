@@ -1,0 +1,2 @@
+# STUB - T015 fills it in.
+FROM python:3.12-slim
