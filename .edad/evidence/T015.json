@@ -1,0 +1,131 @@
+{
+  "ticket": "T015",
+  "started_at": "2026-09-11T14:39:18.162127+00:00",
+  "commit": "ae6925e36036c2ca5d66730f869e9394f563bcea",
+  "base_ref": "b9ecb22",
+  "gate": "full_gate",
+  "freeze_ok": true,
+  "commands_ok": true,
+  "scope_violations": [],
+  "scope_enforced": true,
+  "violations": [],
+  "changed_files": [
+    "Dockerfile.egress",
+    "edad/egress.py",
+    "edad/egress_proxy.py"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m pytest -q",
+      "exit_code": 0,
+      "duration_s": 11.13,
+      "output_tail": "........................................................................ [ 38%]\n........................................................................ [ 76%]\n............................................                             [100%]\n188 passed in 10.77s\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0,
+      "duration_s": 0.05,
+      "output_tail": "All checks passed!\n",
+      "named_paths": [],
+      "timed_out": false,
+      "failure_keys": {}
+    }
+  ],
+  "decisions": [
+    "D13",
+    "D14",
+    "D15",
+    "D17"
+  ],
+  "red_proof": [
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_connect_to_the_allowlisted_host_is_spliced_to_the_upstream -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_connect_to_the_allowlisted_host_is_spliced_to_the_upstream"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_connect_to_any_other_host_is_refused_before_any_upstream_connection -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_connect_to_any_other_host_is_refused_before_any_upstream_connection"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_a_raw_ip_target_is_refused -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_a_raw_ip_target_is_refused"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_a_non_connect_request_is_refused -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_a_non_connect_request_is_refused"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_the_allowlist_is_exactly_the_model_api -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_the_allowlist_is_exactly_the_model_api"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_the_proxy_image_is_built_from_the_checked_in_daemon -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_the_proxy_image_is_built_from_the_checked_in_daemon"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_ensure_starts_the_proxy_on_bridge_first_then_attaches_the_internal_net -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_ensure_starts_the_proxy_on_bridge_first_then_attaches_the_internal_net"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_the_proxy_name_is_deterministic_per_network -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_the_proxy_name_is_deterministic_per_network"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_ensure_creates_only_when_absent_and_reports_whether_it_did -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_ensure_creates_only_when_absent_and_reports_whether_it_did"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_remove_tears_down_by_name -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_remove_tears_down_by_name"
+      ]
+    },
+    {
+      "command": "python3 -m pytest tests/test_egress_proxy.py::test_ensure_refuses_when_the_image_is_absent_naming_the_build_command -q",
+      "exit_code": 1,
+      "detected_by": [
+        "tests/test_egress_proxy.py::test_ensure_refuses_when_the_image_is_absent_naming_the_build_command"
+      ]
+    }
+  ],
+  "mutation_proof": null,
+  "approved": true,
+  "ticket_verified": true,
+  "baseline_commit": null,
+  "new_failures": {},
+  "uncomparable_failures": [],
+  "scope_ok": true,
+  "passed": true,
+  "passed_modulo_baseline": false
+}
