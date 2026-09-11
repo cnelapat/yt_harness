@@ -35,6 +35,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from edad.egress import (  # noqa: F401  # STUB - T016 wires these into cmd_run
+    EgressError,
+    ensure_egress_proxy,
+    proxy_url,
+    remove_egress_proxy,
+)
 from edad.gate import (
     Record,
     changed_files,
@@ -173,7 +179,34 @@ def docker_network_internal(name: str) -> str | None:
     return proc.stdout.strip()
 
 
-def validate_network(sandbox: str, network: str | None) -> None:
+def docker_network_egress(network: str, image: str) -> bool | None:
+    """STUB - T016 fills it in. D11's probe: whether an unconfigured container
+    on `network` reaches the internet. True reached, False did not, None the
+    probe could not be run."""
+    return False
+
+
+def proxy_refuses(network: str, image: str) -> bool | None:
+    """STUB - T016 fills it in. D16's refusal half: whether the proxy on
+    `network` answers a CONNECT to a non-allowlisted host with anything but
+    200. None when it could not be probed."""
+    return None
+
+
+def permit_probe_argv(network: str, image: str) -> list[str]:
+    """STUB - T016 fills it in. The `claude -p --max-turns 1` run that proves
+    the proxy permits the model API with the token the agent will hold."""
+    return []
+
+
+def proxy_permits(network: str, image: str) -> tuple[int, str] | None:
+    """STUB - T016 fills it in. D16's permit half: `(exit code, output tail)`
+    of the permit probe, or None when it could not be started."""
+    return None
+
+
+def validate_network(sandbox: str, network: str | None, image: str = DEFAULT_IMAGE,
+                     dry_run: bool = False) -> list[str]:
     """Refuse a --network the harness cannot back with docker's own answer.
 
     The default tier asserts nothing, so it asks nothing: probing on every run
@@ -184,7 +217,7 @@ def validate_network(sandbox: str, network: str | None) -> None:
     answers "false" and is refused here rather than lied about later.
     """
     if network is None:
-        return
+        return []
     if sandbox != "docker":
         raise Abort(
             f"--network {network} needs --sandbox docker: the network attaches a "
@@ -206,6 +239,14 @@ def validate_network(sandbox: str, network: str | None) -> None:
             "enforces. Re-create it with: "
             f"docker network create --internal {network}"
         )
+    return []
+
+
+def deny_enforcement(ticket: dict, sandbox: str) -> dict[str, str]:
+    """STUB - T016 fills it in. Which half of `network_access: deny` this run
+    enforces: the agent container, mechanically or advisorily, and the
+    verifier, always advisorily."""
+    return {}
 
 
 def agent_has_credential() -> bool | None:
@@ -507,6 +548,8 @@ class SessionLog:
     base_commit: str
     branch: str
     sandbox: str
+    network: str | None = None
+    network_access: dict = field(default_factory=dict)
     outcome: str = "incomplete"
     abort_reason: str | None = None
     iterations: list[Iteration] = field(default_factory=list)
